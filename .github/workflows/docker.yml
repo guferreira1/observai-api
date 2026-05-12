@@ -1,20 +1,25 @@
 name: API Docker Image
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Docker image tag to publish. Example: v0.1.0
+        required: true
+        type: string
+      publish_latest:
+        description: Also publish the latest tag
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: api-docker-${{ github.ref }}
-  cancel-in-progress: true
+  group: api-docker-${{ github.event.inputs.image_tag }}
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/observai-api
@@ -38,6 +43,26 @@ jobs:
             echo "dockerfile=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Validate image tag
+        if: steps.detect.outputs.dockerfile == 'true'
+        shell: bash
+        run: |
+          if [[ ! "${{ github.event.inputs.image_tag }}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "Invalid image_tag. Use semantic versioning, for example: v0.1.0 or 0.1.0-alpha.1"
+            exit 1
+          fi
+
+      - name: Set Docker tags
+        if: steps.detect.outputs.dockerfile == 'true'
+        id: tags
+        shell: bash
+        run: |
+          TAGS="${IMAGE_NAME}:${{ github.event.inputs.image_tag }}"
+          if [ "${{ github.event.inputs.publish_latest }}" = "true" ]; then
+            TAGS="$TAGS,${IMAGE_NAME}:latest"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         if: steps.detect.outputs.dockerfile == 'true'
         uses: docker/setup-buildx-action@v3
@@ -50,20 +75,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        if: steps.detect.outputs.dockerfile == 'true'
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-
-            type=ref,event=branch
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
       - name: Build and push Docker image
         if: steps.detect.outputs.dockerfile == 'true'
         uses: docker/build-push-action@v6
@@ -71,8 +82,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
