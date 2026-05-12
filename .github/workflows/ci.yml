@@ -1,0 +1,63 @@
+name: API CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Go project
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect Go project
+        id: detect
+        shell: bash
+        run: |
+          if [ -f "go.mod" ]; then
+            echo "go_project=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go_project=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Go
+        if: steps.detect.outputs.go_project == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        if: steps.detect.outputs.go_project == 'true'
+        run: go mod download
+
+      - name: Format check
+        if: steps.detect.outputs.go_project == 'true'
+        run: |
+          test -z "$(gofmt -l .)"
+
+      - name: Vet
+        if: steps.detect.outputs.go_project == 'true'
+        run: go vet ./...
+
+      - name: Test
+        if: steps.detect.outputs.go_project == 'true'
+        run: go test ./... -race -coverprofile=coverage.out
+
+      - name: Build
+        if: steps.detect.outputs.go_project == 'true'
+        run: go build ./...
+
+      - name: Skip validation
+        if: steps.detect.outputs.go_project == 'false'
+        run: echo "go.mod not found yet. Skipping Go validation until the project is initialized."
