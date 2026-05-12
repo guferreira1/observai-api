@@ -206,59 +206,6 @@ ObservAI API is observability-provider agnostic.
 
 ---
 
-## Architecture
-
-```txt
-observai-api
-├── cmd/
-│   └── api/                  # Application entrypoint
-├── internal/
-│   ├── analysis/             # Analysis orchestration and diagnosis generation
-│   ├── providers/            # Observability provider adapters
-│   ├── llm/                  # LLM provider adapters
-│   ├── workers/              # Worker pool and concurrent execution
-│   ├── queue/                # Queue management
-│   ├── sessions/             # Analysis sessions and chat context
-│   ├── security/             # Token encryption and auth helpers
-│   ├── storage/              # Database access
-│   ├── config/               # Configuration loading
-│   └── http/                 # Handlers, routes and middleware
-├── pkg/
-│   └── contracts/            # Public contracts and shared types
-├── deployments/
-│   ├── docker-compose.yml
-│   └── k8s/
-└── docs/
-    ├── architecture.md
-    ├── providers.md
-    ├── llm.md
-    └── security.md
-```
-
----
-
-## Backend responsibilities
-
-The Go backend is responsible for:
-
-- API gateway
-- Provider management
-- LLM provider management
-- Secure token handling
-- Analysis orchestration
-- Worker pool execution
-- Queue management
-- Session isolation
-- Context generation
-- Result normalization
-- Streaming responses
-- Analysis history
-- Chat context persistence
-
-A key part of the architecture is the worker execution model, which isolates analysis sessions and prevents context leakage between users or concurrent requests.
-
----
-
 ## Environment variables
 
 ```env
