@@ -1,0 +1,14 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema:
+      - migrations/000001_create_analyses_and_chat_messages.up.sql
+    queries:
+      - internal/adapters/outbound/postgres/query
+    gen:
+      go:
+        package: sqlc
+        out: internal/adapters/outbound/postgres/sqlc
+        sql_package: pgx/v5
+        emit_json_tags: true
+        emit_empty_slices: true
