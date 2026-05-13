@@ -79,6 +79,7 @@ func (router *Router) routes() {
 	if router.options.Readiness != nil {
 		router.mux.Method(stdhttp.MethodGet, "/readyz", router.options.Readiness)
 	}
+	router.mux.Get("/v1/openapi.yaml", router.handleOpenAPI)
 	router.mux.Get("/v1/analyses", router.handleListAnalyses)
 	router.mux.Post("/v1/analyses", router.handleCreateAnalysis)
 	router.mux.Get("/v1/analyses/{analysisID}", router.handleGetAnalysis)

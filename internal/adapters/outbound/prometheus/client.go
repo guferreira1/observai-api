@@ -9,6 +9,7 @@ package prometheus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,20 +18,23 @@ import (
 	"time"
 
 	"github.com/guferreira1/observai-api/internal/platform/observability"
+	"github.com/guferreira1/observai-api/internal/platform/retry"
 )
 
 // Client is a minimal Prometheus HTTP client tailored for instant queries.
 type Client struct {
-	baseURL    *url.URL
-	httpClient *http.Client
-	observer   observability.ProviderObserver
+	baseURL     *url.URL
+	httpClient  *http.Client
+	observer    observability.ProviderObserver
+	retryPolicy retry.Policy
 }
 
 // ClientOptions configures Prometheus HTTP behavior.
 type ClientOptions struct {
-	BaseURL  string
-	Timeout  time.Duration
-	Observer observability.ProviderObserver
+	BaseURL     string
+	Timeout     time.Duration
+	Observer    observability.ProviderObserver
+	RetryPolicy retry.Policy
 }
 
 // NewClient validates the base URL and returns a configured Prometheus client.
@@ -53,10 +57,16 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		observer = observability.NoopProviderObserver{}
 	}
 
+	retryPolicy := opts.RetryPolicy
+	if retryPolicy.MaxAttempts <= 0 {
+		retryPolicy = retry.Default()
+	}
+
 	return &Client{
-		baseURL:    parsed,
-		httpClient: &http.Client{Timeout: timeout},
-		observer:   observer,
+		baseURL:     parsed,
+		httpClient:  &http.Client{Timeout: timeout},
+		observer:    observer,
+		retryPolicy: retryPolicy,
 	}, nil
 }
 
@@ -107,7 +117,9 @@ type instantResponse struct {
 }
 
 // Query executes a PromQL instant query at evaluation time `at` (UTC).
-// When at is the zero value the server's current time is used.
+// When at is the zero value the server's current time is used. Transient
+// failures (network errors and 5xx responses) are retried with bounded
+// exponential backoff and full jitter.
 func (client *Client) Query(ctx context.Context, query string, at time.Time) (samples []InstantSample, err error) {
 	startedAt := time.Now()
 	defer func() {
@@ -127,7 +139,22 @@ func (client *Client) Query(ctx context.Context, query string, at time.Time) (sa
 	}
 	endpoint.RawQuery = values.Encode()
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	err = retry.Do(ctx, client.retryPolicy, isRetryable, func(int) error {
+		result, attemptErr := client.executeQuery(ctx, endpoint.String())
+		if attemptErr != nil {
+			return attemptErr
+		}
+		samples = result
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return samples, nil
+}
+
+func (client *Client) executeQuery(ctx context.Context, endpoint string) ([]InstantSample, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build prometheus request: %w", err)
 	}
@@ -135,15 +162,18 @@ func (client *Client) Query(ctx context.Context, query string, at time.Time) (sa
 
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("call prometheus: %w", err)
+		return nil, &transientError{err: fmt.Errorf("call prometheus: %w", err)}
 	}
 	defer response.Body.Close()
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read prometheus response: %w", err)
+		return nil, &transientError{err: fmt.Errorf("read prometheus response: %w", err)}
 	}
 
+	if response.StatusCode >= http.StatusInternalServerError {
+		return nil, &transientError{err: fmt.Errorf("prometheus returned status %d: %s", response.StatusCode, truncate(string(body), 200))}
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		return nil, fmt.Errorf("prometheus returned status %d: %s", response.StatusCode, truncate(string(body), 200))
 	}
@@ -159,7 +189,7 @@ func (client *Client) Query(ctx context.Context, query string, at time.Time) (sa
 		return nil, fmt.Errorf("unsupported prometheus result type %q", parsed.Data.ResultType)
 	}
 
-	samples = make([]InstantSample, 0, len(parsed.Data.Result))
+	samples := make([]InstantSample, 0, len(parsed.Data.Result))
 	for _, raw := range parsed.Data.Result {
 		sample, decodeErr := decodeVectorSample(raw)
 		if decodeErr != nil {
@@ -169,6 +199,16 @@ func (client *Client) Query(ctx context.Context, query string, at time.Time) (sa
 	}
 
 	return samples, nil
+}
+
+type transientError struct{ err error }
+
+func (e *transientError) Error() string { return e.err.Error() }
+func (e *transientError) Unwrap() error { return e.err }
+
+func isRetryable(err error) bool {
+	var transient *transientError
+	return errors.As(err, &transient)
 }
 
 func decodeVectorSample(raw json.RawMessage) (InstantSample, error) {

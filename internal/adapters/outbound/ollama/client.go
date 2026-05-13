@@ -2,7 +2,8 @@
 //
 // The package targets the /api/chat endpoint with structured (json) output so
 // downstream code can deserialize responses without ad-hoc parsing. Each call
-// applies the configured timeout and a single retry on transient failure.
+// applies the configured timeout and retries transient failures with bounded
+// exponential backoff and full jitter.
 package ollama
 
 import (
@@ -17,22 +18,25 @@ import (
 	"time"
 
 	"github.com/guferreira1/observai-api/internal/platform/observability"
+	"github.com/guferreira1/observai-api/internal/platform/retry"
 )
 
 // ClientOptions configures Ollama HTTP behavior.
 type ClientOptions struct {
-	BaseURL  string
-	Model    string
-	Timeout  time.Duration
-	Observer observability.ProviderObserver
+	BaseURL     string
+	Model       string
+	Timeout     time.Duration
+	Observer    observability.ProviderObserver
+	RetryPolicy retry.Policy
 }
 
 // Client is a minimal Ollama HTTP client tailored for chat completions.
 type Client struct {
-	baseURL    *url.URL
-	model      string
-	httpClient *http.Client
-	observer   observability.ProviderObserver
+	baseURL     *url.URL
+	model       string
+	httpClient  *http.Client
+	observer    observability.ProviderObserver
+	retryPolicy retry.Policy
 }
 
 // NewClient validates the base URL and returns a configured Ollama client.
@@ -58,11 +62,17 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		observer = observability.NoopProviderObserver{}
 	}
 
+	retryPolicy := opts.RetryPolicy
+	if retryPolicy.MaxAttempts <= 0 {
+		retryPolicy = retry.Default()
+	}
+
 	return &Client{
-		baseURL:    parsed,
-		model:      opts.Model,
-		httpClient: &http.Client{Timeout: timeout},
-		observer:   observer,
+		baseURL:     parsed,
+		model:       opts.Model,
+		httpClient:  &http.Client{Timeout: timeout},
+		observer:    observer,
+		retryPolicy: retryPolicy,
 	}, nil
 }
 
@@ -126,8 +136,10 @@ func (client *Client) Ping(ctx context.Context) (err error) {
 	return nil
 }
 
-// Chat performs an Ollama chat completion. The first attempt is retried once
-// on transient network or 5xx failures, capped by the client timeout per try.
+// Chat performs an Ollama chat completion. Transient network failures and 5xx
+// responses are retried using bounded exponential backoff with full jitter,
+// governed by the client retry policy. The per-attempt deadline is bounded by
+// the client timeout.
 func (client *Client) Chat(ctx context.Context, request ChatRequest) (content string, err error) {
 	startedAt := time.Now()
 	defer func() {
@@ -160,18 +172,18 @@ func (client *Client) Chat(ctx context.Context, request ChatRequest) (content st
 	endpoint := *client.baseURL
 	endpoint.Path = joinPath(endpoint.Path, "/api/chat")
 
-	for attempt := 0; attempt < 2; attempt++ {
+	err = retry.Do(ctx, client.retryPolicy, isRetryable, func(int) error {
 		response, attemptErr := client.do(ctx, endpoint.String(), body)
-		if attemptErr == nil {
-			return response, nil
+		if attemptErr != nil {
+			return attemptErr
 		}
-		err = attemptErr
-		if !isRetryable(attemptErr) || ctx.Err() != nil {
-			break
-		}
+		content = response
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
-
-	return "", err
+	return content, nil
 }
 
 func (client *Client) do(ctx context.Context, endpoint string, body []byte) (string, error) {

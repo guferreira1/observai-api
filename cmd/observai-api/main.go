@@ -111,12 +111,18 @@ func main() {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownTimeout := cfg.HTTPShutdownTimeout
+		if shutdownTimeout <= 0 {
+			shutdownTimeout = 30 * time.Second
+		}
+		log.Info("shutdown signal received, draining in-flight requests", "timeout", shutdownTimeout)
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			log.Error("server shutdown failed", "error", err)
-			os.Exit(1)
+			_ = srv.Close()
 		}
 
 		if err := tracer.Shutdown(shutdownCtx); err != nil {

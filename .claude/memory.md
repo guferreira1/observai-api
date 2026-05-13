@@ -15,6 +15,20 @@ This file stores concise session notes for ObservAI API.
 
 ## Entries
 
+### 2026-05-13 - Phase 6 public contract + DX
+
+- Summary: published the API contract as a hand-written OpenAPI 3.1 document embedded in the HTTP adapter and served at `GET /v1/openapi.yaml`; enriched the runtime LLM prompts in `agents/observability-analysis-agent.md` and `agents/interaction-chat-agent.md` with strict JSON schemas, refusal envelope, few-shot examples and prompt-injection countermeasures; added a build-tagged end-to-end integration test (`internal/adapters/inbound/http/integration_test.go`, tag `integration`) that spins up a real PostgreSQL container via testcontainers-go, runs `golang-migrate` programmatically, and drives `POST /v1/analyses → GET /v1/analyses/:id → GET /v1/analyses → POST /v1/analyses/:id/chat → GET /v1/analyses/:id/chat` plus the out-of-scope rejection path; created `docs/architecture.md` and `api/README.md`.
+- Decisions: spec lives at `internal/adapters/inbound/http/openapi.yaml` (embed.FS does not allow `..` paths) and `api/README.md` documents that the embed file is the source of truth; kept the same `fake.*` adapters in the integration test so chat history exercises the Postgres `analysis_chat_messages` table while the LLM responder stays deterministic; chose `tcpostgres.WithSQLDriver` is unnecessary because we open the repository with pgx directly via `postgres.NewAnalysisRepository`; build-tag gates the testcontainer test so `go test ./...` stays Docker-free.
+- Pending: optional Phase 6 extras (circuit breaker on top of retry, Asynq jobs) and a real Redis/Postgres-backed integration test for the chat context cache.
+- Validation: ran `gofmt -w cmd internal`; ran `GOCACHE=/tmp/observai-go-build-cache GOMODCACHE=/tmp/observai-go-mod-cache go vet ./...`; ran `GOCACHE=/tmp/observai-go-build-cache GOMODCACHE=/tmp/observai-go-mod-cache go build ./...`; ran `GOCACHE=/tmp/observai-go-build-cache GOMODCACHE=/tmp/observai-go-mod-cache go test ./...`; ran `GOCACHE=/tmp/observai-go-build-cache GOMODCACHE=/tmp/observai-go-mod-cache go test -tags=integration -count=1 -timeout=5m ./internal/adapters/inbound/http/...` (Docker available, 6.4s, all subtests passing including the out-of-scope rejection path).
+
+### 2026-05-12 - Robustness phase (retry + graceful shutdown)
+
+- Summary: added `internal/platform/retry` with bounded exponential backoff and full jitter, integrated it into the Ollama and Prometheus clients replacing the manual retry loop, classified Prometheus transient errors (network + 5xx) and locked behavior with regression tests; wired `cfg.HTTPShutdownTimeout` into `main.go` so the HTTP server drains in-flight requests with the configured grace period and falls back to `srv.Close()` if shutdown fails.
+- Decisions: kept a local `transientError` type per adapter to preserve type-safe classification without leaking infra concerns across packages; defaulted `retry.Default()` to 3 attempts, 100ms base, 2s cap; left tracer shutdown sharing the same drain context; on shutdown timeout the server force-closes rather than os.Exit so the rest of the orderly teardown still runs.
+- Pending: Phase 6 work (OpenAPI generation, runtime agent prompt files under `agents/`, Postgres testcontainers integration test, `docs/architecture.md`); optional circuit breaker on top of retry is still open.
+- Validation: ran `gofmt -w internal`; ran `GOCACHE=/tmp/observai-go-build-cache go vet ./...`; ran `GOCACHE=/tmp/observai-go-build-cache go build ./...`; ran `GOCACHE=/tmp/observai-go-build-cache go test ./...`.
+
 ### 2026-05-12 - Onda 1 configuration and analysis listing
 
 - Summary: added YAML-based configuration loading through `OBSERVAI_CONFIG_FILE` with environment overrides, documented `config.example.yaml` and `.env.example`, added paginated `GET /v1/analyses` with service/severity filters, wired list support through the analysis use case and fake/PostgreSQL repositories, and strengthened CI with Postgres service, sqlc compile/diff and migration checks.

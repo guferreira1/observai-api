@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/guferreira1/observai-api/internal/core/domain"
+	"github.com/guferreira1/observai-api/internal/platform/retry"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -104,6 +106,57 @@ func TestSignalCollectorSurfacesQueryError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "broken")
+}
+
+func TestClientQueryRetriesOn5xx(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			writer.WriteHeader(http.StatusBadGateway)
+			_, _ = writer.Write([]byte("upstream down"))
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		BaseURL:     server.URL,
+		Timeout:     2 * time.Second,
+		RetryPolicy: retry.Policy{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond},
+	})
+	require.NoError(t, err)
+
+	samples, err := client.Query(context.Background(), "up", time.Time{})
+	require.NoError(t, err)
+	assert.Empty(t, samples)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestClientQueryDoesNotRetryOnClientError(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte("bad request"))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		BaseURL:     server.URL,
+		Timeout:     2 * time.Second,
+		RetryPolicy: retry.Policy{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond},
+	})
+	require.NoError(t, err)
+
+	_, err = client.Query(context.Background(), "up", time.Time{})
+	require.Error(t, err)
+	assert.Equal(t, int32(1), calls.Load())
 }
 
 func TestEscapeLabelEscapesQuotesAndBackslashes(t *testing.T) {
