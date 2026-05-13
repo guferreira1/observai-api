@@ -22,6 +22,7 @@ type RouterOptions struct {
 	Logger             *slog.Logger
 	RequestTimeout     time.Duration
 	MaxRequestBodyByte int64
+	RateLimit          RateLimitConfig
 	Metrics            stdhttp.Handler
 	Liveness           stdhttp.Handler
 	Readiness          stdhttp.Handler
@@ -67,6 +68,7 @@ func (router *Router) routes() {
 	router.mux.Use(middleware.RealIP)
 	router.mux.Use(loggerMiddleware(router.logger))
 	router.mux.Use(recoverMiddleware(router.logger))
+	router.mux.Use(rateLimitMiddleware(newRateLimiter(router.options.RateLimit)))
 	router.mux.Use(bodyLimitMiddleware(router.options.MaxRequestBodyByte))
 	router.mux.Use(timeoutMiddleware(router.options.RequestTimeout))
 
@@ -99,8 +101,8 @@ func (router *Router) handleCreateAnalysis(writer stdhttp.ResponseWriter, reques
 	requestID := router.requestID(request)
 
 	var dto AnalysisRequestDto
-	if err := json.NewDecoder(request.Body).Decode(&dto); err != nil {
-		router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if err := decodeRequestBody(request, &dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
 
@@ -180,8 +182,8 @@ func (router *Router) handleChat(writer stdhttp.ResponseWriter, request *stdhttp
 	*request = *request.WithContext(ctx)
 
 	var dto ChatRequestDto
-	if err := json.NewDecoder(request.Body).Decode(&dto); err != nil {
-		router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	if err := decodeRequestBody(request, &dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
 
@@ -324,12 +326,7 @@ func parseOptionalPositiveInt(raw string, name string) (int, error) {
 }
 
 func isValidSeverity(severity domain.Severity) bool {
-	switch severity {
-	case domain.SeverityInfo, domain.SeverityLow, domain.SeverityMedium, domain.SeverityHigh, domain.SeverityCritical:
-		return true
-	default:
-		return false
-	}
+	return domain.IsValidSeverity(severity)
 }
 
 func toPagination(request *stdhttp.Request, result domain.AnalysisList) *Pagination {

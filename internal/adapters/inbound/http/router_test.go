@@ -208,11 +208,35 @@ func TestRouterRejectsBodyLargerThanLimit(t *testing.T) {
 
 	router.ServeHTTP(response, request)
 
-	assert.Equal(t, stdhttp.StatusBadRequest, response.Code)
+	assert.Equal(t, stdhttp.StatusRequestEntityTooLarge, response.Code)
+
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "request_body_too_large", payload.Data.Code)
+}
+
+func TestRouterRejectsBodyWithUnknownFields(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"],
+		"signals": ["logs"],
+		"unexpectedField": "boom"
+	}`))
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
 
 	var payload WrapperDtoResponde[ErrorResponse]
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
 	assert.Equal(t, "invalid_json", payload.Data.Code)
+	require.NotEmpty(t, payload.Data.Details)
+	assert.Equal(t, "unknown_field", payload.Data.Details[0].Rule)
 }
 
 func TestRouterReturnsNotFoundForMissingAnalysis(t *testing.T) {

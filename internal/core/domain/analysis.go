@@ -39,6 +39,33 @@ const (
 	SeverityCritical Severity = "critical"
 )
 
+var severityRanks = map[Severity]int{
+	SeverityInfo:     0,
+	SeverityLow:      1,
+	SeverityMedium:   2,
+	SeverityHigh:     3,
+	SeverityCritical: 4,
+}
+
+// IsValidSeverity reports whether severity belongs to the public severity enum.
+func IsValidSeverity(severity Severity) bool {
+	_, ok := severityRanks[severity]
+	return ok
+}
+
+// NormalizeSeverity returns severity when valid or SeverityInfo otherwise.
+func NormalizeSeverity(severity Severity) Severity {
+	if IsValidSeverity(severity) {
+		return severity
+	}
+	return SeverityInfo
+}
+
+// SeverityRank returns the relative operational impact of severity.
+func SeverityRank(severity Severity) int {
+	return severityRanks[NormalizeSeverity(severity)]
+}
+
 // Confidence describes how strongly the available evidence supports the analysis.
 type Confidence string
 

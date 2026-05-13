@@ -26,6 +26,24 @@ const (
 	ModeProd Mode = "prod"
 )
 
+var supportedModes = map[Mode]struct{}{
+	ModeLocal: {},
+	ModeDev:   {},
+	ModeProd:  {},
+}
+
+type requiredConfigValue struct {
+	envName string
+	value   func(Config) string
+}
+
+var prodRequiredConfigValues = []requiredConfigValue{
+	{envName: "OBSERVAI_DATABASE_DSN", value: func(cfg Config) string { return cfg.DatabaseDSN }},
+	{envName: "OBSERVAI_REDIS_URL", value: func(cfg Config) string { return cfg.RedisURL }},
+	{envName: "OBSERVAI_PROMETHEUS_URL", value: func(cfg Config) string { return cfg.Prometheus.URL }},
+	{envName: "OBSERVAI_OLLAMA_URL", value: func(cfg Config) string { return cfg.Ollama.URL }},
+}
+
 // PrometheusConfig holds Prometheus adapter configuration.
 type PrometheusConfig struct {
 	URL     string        `yaml:"url" env:"OBSERVAI_PROMETHEUS_URL"`
@@ -57,20 +75,28 @@ type TracingConfig struct {
 	Timeout     time.Duration `yaml:"timeout" env:"OBSERVAI_OTEL_EXPORTER_OTLP_TIMEOUT" env-default:"5s"`
 }
 
+// HTTPRateLimitConfig configures per-IP HTTP rate limiting.
+type HTTPRateLimitConfig struct {
+	RequestsPerSecond float64 `yaml:"requests_per_second" env:"OBSERVAI_HTTP_RATE_LIMIT_RPS" env-default:"0"`
+	Burst             int     `yaml:"burst" env:"OBSERVAI_HTTP_RATE_LIMIT_BURST" env-default:"0"`
+}
+
 // Config contains application runtime configuration.
 type Config struct {
-	Port                    string           `yaml:"port" env:"OBSERVAI_API_PORT" env-default:"8080"`
-	Env                     string           `yaml:"env" env:"OBSERVAI_ENV" env-default:"local"`
-	Mode                    Mode             `yaml:"mode" env:"OBSERVAI_MODE" env-default:"local"`
-	DatabaseDSN             string           `yaml:"database_dsn" env:"OBSERVAI_DATABASE_DSN"`
-	RedisURL                string           `yaml:"redis_url" env:"OBSERVAI_REDIS_URL"`
-	AnalysisContextCacheTTL time.Duration    `yaml:"analysis_context_cache_ttl" env:"OBSERVAI_ANALYSIS_CONTEXT_CACHE_TTL" env-default:"6h"`
-	HTTPRequestTimeout      time.Duration    `yaml:"http_request_timeout" env:"OBSERVAI_HTTP_REQUEST_TIMEOUT" env-default:"30s"`
-	HTTPMaxBodyBytes        int64            `yaml:"http_max_body_bytes" env:"OBSERVAI_HTTP_MAX_BODY_BYTES" env-default:"1048576"`
-	Prometheus              PrometheusConfig `yaml:"prometheus"`
-	Ollama                  OllamaConfig     `yaml:"ollama"`
-	Prompts                 PromptsConfig    `yaml:"prompts"`
-	Tracing                 TracingConfig    `yaml:"tracing"`
+	Port                    string              `yaml:"port" env:"OBSERVAI_API_PORT" env-default:"8080"`
+	Env                     string              `yaml:"env" env:"OBSERVAI_ENV" env-default:"local"`
+	Mode                    Mode                `yaml:"mode" env:"OBSERVAI_MODE" env-default:"local"`
+	DatabaseDSN             string              `yaml:"database_dsn" env:"OBSERVAI_DATABASE_DSN"`
+	RedisURL                string              `yaml:"redis_url" env:"OBSERVAI_REDIS_URL"`
+	AnalysisContextCacheTTL time.Duration       `yaml:"analysis_context_cache_ttl" env:"OBSERVAI_ANALYSIS_CONTEXT_CACHE_TTL" env-default:"6h"`
+	HTTPRequestTimeout      time.Duration       `yaml:"http_request_timeout" env:"OBSERVAI_HTTP_REQUEST_TIMEOUT" env-default:"30s"`
+	HTTPMaxBodyBytes        int64               `yaml:"http_max_body_bytes" env:"OBSERVAI_HTTP_MAX_BODY_BYTES" env-default:"1048576"`
+	HTTPShutdownTimeout     time.Duration       `yaml:"http_shutdown_timeout" env:"OBSERVAI_HTTP_SHUTDOWN_TIMEOUT" env-default:"30s"`
+	HTTPRateLimit           HTTPRateLimitConfig `yaml:"http_rate_limit"`
+	Prometheus              PrometheusConfig    `yaml:"prometheus"`
+	Ollama                  OllamaConfig        `yaml:"ollama"`
+	Prompts                 PromptsConfig       `yaml:"prompts"`
+	Tracing                 TracingConfig       `yaml:"tracing"`
 }
 
 // Load reads application configuration from YAML when configured and environment variables.
@@ -105,17 +131,10 @@ func (cfg Config) Validate() error {
 	}
 
 	var missing []string
-	if strings.TrimSpace(cfg.DatabaseDSN) == "" {
-		missing = append(missing, "OBSERVAI_DATABASE_DSN")
-	}
-	if strings.TrimSpace(cfg.RedisURL) == "" {
-		missing = append(missing, "OBSERVAI_REDIS_URL")
-	}
-	if strings.TrimSpace(cfg.Prometheus.URL) == "" {
-		missing = append(missing, "OBSERVAI_PROMETHEUS_URL")
-	}
-	if strings.TrimSpace(cfg.Ollama.URL) == "" {
-		missing = append(missing, "OBSERVAI_OLLAMA_URL")
+	for _, requirement := range prodRequiredConfigValues {
+		if strings.TrimSpace(requirement.value(cfg)) == "" {
+			missing = append(missing, requirement.envName)
+		}
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("mode=prod requires: %s", strings.Join(missing, ", "))
@@ -124,10 +143,9 @@ func (cfg Config) Validate() error {
 }
 
 func normalizeMode(mode Mode) Mode {
-	switch Mode(strings.ToLower(strings.TrimSpace(string(mode)))) {
-	case ModeLocal, ModeDev, ModeProd:
-		return Mode(strings.ToLower(strings.TrimSpace(string(mode))))
-	default:
-		return ModeLocal
+	normalized := Mode(strings.ToLower(strings.TrimSpace(string(mode))))
+	if _, ok := supportedModes[normalized]; ok {
+		return normalized
 	}
+	return ModeLocal
 }

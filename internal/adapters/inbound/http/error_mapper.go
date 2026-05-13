@@ -81,6 +81,64 @@ var domainErrorRules = []domainErrorRule{
 		},
 	},
 	{
+		match: func(err error) bool { return errors.Is(err, errRequestBodyTooLarge) },
+		response: httpErrorResponse{
+			status:  stdhttp.StatusRequestEntityTooLarge,
+			code:    "request_body_too_large",
+			message: "request body exceeds the configured size limit",
+		},
+	},
+	{
+		match: func(err error) bool { return errors.Is(err, errRequestBodyEmpty) },
+		response: httpErrorResponse{
+			status:  stdhttp.StatusBadRequest,
+			code:    "invalid_json",
+			message: "request body is empty",
+		},
+	},
+	{
+		match: func(err error) bool {
+			var unknownField errRequestBodyUnknownField
+			return errors.As(err, &unknownField)
+		},
+		build: func(err error) httpErrorResponse {
+			var unknownField errRequestBodyUnknownField
+			_ = errors.As(err, &unknownField)
+			return httpErrorResponse{
+				status:  stdhttp.StatusBadRequest,
+				code:    "invalid_json",
+				message: "request body contains unknown field",
+				details: []ErrorFieldDetail{{Field: unknownField.Field, Rule: "unknown_field"}},
+			}
+		},
+	},
+	{
+		match: func(err error) bool {
+			var extraData errRequestBodyExtraData
+			return errors.As(err, &extraData)
+		},
+		response: httpErrorResponse{
+			status:  stdhttp.StatusBadRequest,
+			code:    "invalid_json",
+			message: "request body must contain a single JSON document",
+		},
+	},
+	{
+		match: func(err error) bool {
+			var malformed errRequestBodyMalformed
+			return errors.As(err, &malformed)
+		},
+		build: func(err error) httpErrorResponse {
+			var malformed errRequestBodyMalformed
+			_ = errors.As(err, &malformed)
+			return httpErrorResponse{
+				status:  stdhttp.StatusBadRequest,
+				code:    "invalid_json",
+				message: malformed.Reason,
+			}
+		},
+	},
+	{
 		match: func(err error) bool { return errors.Is(err, context.DeadlineExceeded) },
 		response: httpErrorResponse{
 			status:  stdhttp.StatusGatewayTimeout,

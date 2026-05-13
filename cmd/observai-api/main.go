@@ -89,9 +89,13 @@ func main() {
 		Logger:             log,
 		RequestTimeout:     cfg.HTTPRequestTimeout,
 		MaxRequestBodyByte: cfg.HTTPMaxBodyBytes,
-		Metrics:            metricsHandler,
-		Liveness:           health.LivenessHandler(),
-		Readiness:          health.ReadinessHandler(checker),
+		RateLimit: inboundhttp.RateLimitConfig{
+			RequestsPerSecond: cfg.HTTPRateLimit.RequestsPerSecond,
+			Burst:             cfg.HTTPRateLimit.Burst,
+		},
+		Metrics:   metricsHandler,
+		Liveness:  health.LivenessHandler(),
+		Readiness: health.ReadinessHandler(checker),
 	})
 	handler := metrics.Middleware(telemetry.WrapHandler("observai-api", router))
 	srv := server.New(cfg, handler)

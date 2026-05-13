@@ -7,23 +7,27 @@ import (
 	"time"
 
 	"github.com/guferreira1/observai-api/internal/core/domain"
+	"github.com/guferreira1/observai-api/internal/core/policy"
 	"github.com/guferreira1/observai-api/internal/core/ports"
 )
 
 const (
 	defaultAnalysisListLimit = 20
 	maxAnalysisListLimit     = 100
+	maxLLMEvidenceItems      = 25
 )
 
 // Analysis orchestrates observability evidence collection and analysis generation.
 type Analysis struct {
-	collector  ports.SignalCollector
-	generator  ports.AnalysisGenerator
-	repository ports.AnalysisRepository
-	cache      ports.AnalysisContextCache
-	cacheTTL   time.Duration
-	ids        ports.IDGenerator
-	now        func() time.Time
+	collector       ports.SignalCollector
+	generator       ports.AnalysisGenerator
+	repository      ports.AnalysisRepository
+	cache           ports.AnalysisContextCache
+	cacheTTL        time.Duration
+	ids             ports.IDGenerator
+	severity        policy.SeverityPolicy
+	recommendations policy.RecommendationPolicy
+	now             func() time.Time
 }
 
 // NewAnalysis creates an analysis use case.
@@ -40,13 +44,15 @@ func NewAnalysis(
 	}
 
 	return &Analysis{
-		collector:  collector,
-		generator:  generator,
-		repository: repository,
-		cache:      cache,
-		cacheTTL:   cacheTTL,
-		ids:        ids,
-		now:        time.Now,
+		collector:       collector,
+		generator:       generator,
+		repository:      repository,
+		cache:           cache,
+		cacheTTL:        cacheTTL,
+		ids:             ids,
+		severity:        policy.NewSeverityPolicy(),
+		recommendations: policy.NewRecommendationPolicy(),
+		now:             time.Now,
 	}
 }
 
@@ -61,7 +67,9 @@ func (useCase *Analysis) Analyze(ctx context.Context, request domain.AnalysisReq
 		return domain.AnalysisResult{}, fmt.Errorf("collect analysis evidence: %w", err)
 	}
 
-	result, err := useCase.generator.Generate(ctx, request, evidence)
+	relevant := policy.FilterEvidence(evidence, policy.RelevantEvidenceSpecification(request), maxLLMEvidenceItems)
+
+	result, err := useCase.generator.Generate(ctx, request, relevant)
 	if err != nil {
 		return domain.AnalysisResult{}, fmt.Errorf("generate analysis: %w", err)
 	}
@@ -73,6 +81,15 @@ func (useCase *Analysis) Analyze(ctx context.Context, request domain.AnalysisReq
 
 	result.ID = id
 	result.Evidence = evidence
+	result.Severity = useCase.severity.Reconcile(result.Severity, policy.SeverityInput{
+		Request:  request,
+		Evidence: evidence,
+	})
+	result.RecommendedActions = useCase.recommendations.Apply(policy.RecommendationInput{
+		Request:  request,
+		Evidence: evidence,
+		Result:   result,
+	})
 	result.CreatedAt = useCase.now().UTC()
 
 	if err := useCase.repository.Save(ctx, result); err != nil {
