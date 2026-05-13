@@ -2,7 +2,7 @@
 
 This directory contains versioned instructions for runtime LLM behavior.
 
-These files are different from local assistant rules under `.codex/`. The application can use these instructions to build compact prompts for analysis, prompt translation and interaction chat without depending on uncommitted local workspace files.
+The application can use these instructions to build compact prompts for analysis, prompt translation and interaction chat without depending on uncommitted local workspace files.
 
 ## Goals
 
