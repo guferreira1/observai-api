@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRouterCreateAnalysisWrapsResponse(t *testing.T) {
+func TestRouterSubmitAnalysisReturnsAcceptedJob(t *testing.T) {
 	t.Parallel()
 
 	router := newTestRouter()
@@ -34,16 +34,58 @@ func TestRouterCreateAnalysisWrapsResponse(t *testing.T) {
 
 	router.ServeHTTP(response, request)
 
-	require.Equal(t, stdhttp.StatusCreated, response.Code)
+	require.Equal(t, stdhttp.StatusAccepted, response.Code)
+	assert.Equal(t, "/v1/jobs/analysis-000001", response.Header().Get("Location"))
 
-	var payload map[string]any
+	var payload WrapperDtoResponde[AnalysisJobAcceptedDto]
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
-	assert.Contains(t, payload, "data")
-	assert.Contains(t, payload, "metadata")
+	assert.Equal(t, "analysis-000001", payload.Data.JobID)
+	assert.Equal(t, "/v1/jobs/analysis-000001", payload.Data.StatusURL)
+}
 
-	data := payload["data"].(map[string]any)
-	assert.Equal(t, "analysis-000001", data["id"])
-	assert.Equal(t, "high", data["severity"])
+func TestRouterGetAnalysisJobReturnsCompletedStatus(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	submit := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {
+			"start": "2026-05-12T10:00:00Z",
+			"end": "2026-05-12T11:00:00Z"
+		},
+		"affectedServices": ["checkout-service"],
+		"signals": ["logs", "metrics", "traces"]
+	}`))
+	submitResponse := httptest.NewRecorder()
+	router.ServeHTTP(submitResponse, submit)
+	require.Equal(t, stdhttp.StatusAccepted, submitResponse.Code)
+
+	statusRequest := httptest.NewRequest(stdhttp.MethodGet, "/v1/jobs/analysis-000001", nil)
+	statusResponse := httptest.NewRecorder()
+	router.ServeHTTP(statusResponse, statusRequest)
+	require.Equal(t, stdhttp.StatusOK, statusResponse.Code)
+
+	var payload WrapperDtoResponde[AnalysisJobStatusDto]
+	require.NoError(t, json.Unmarshal(statusResponse.Body.Bytes(), &payload))
+	assert.Equal(t, "analysis-000001", payload.Data.JobID)
+	assert.Equal(t, "completed", payload.Data.Status)
+	assert.Equal(t, "analysis-000001", payload.Data.AnalysisID)
+	assert.Equal(t, "/v1/analyses/analysis-000001", payload.Data.AnalysisURL)
+}
+
+func TestRouterGetAnalysisJobReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/jobs/job-missing", nil)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+	require.Equal(t, stdhttp.StatusNotFound, response.Code)
+
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "analysis_job_not_found", payload.Data.Code)
 }
 
 func TestRouterReturnsAnalysisByID(t *testing.T) {
@@ -61,7 +103,7 @@ func TestRouterReturnsAnalysisByID(t *testing.T) {
 	}`))
 	createResponse := httptest.NewRecorder()
 	router.ServeHTTP(createResponse, createRequest)
-	require.Equal(t, stdhttp.StatusCreated, createResponse.Code)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
 
 	getRequest := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses/analysis-000001", nil)
 	getResponse := httptest.NewRecorder()
@@ -90,7 +132,7 @@ func TestRouterListsAnalysesWithPaginationMetadata(t *testing.T) {
 	}`))
 	createCheckoutResponse := httptest.NewRecorder()
 	router.ServeHTTP(createCheckoutResponse, createCheckoutRequest)
-	require.Equal(t, stdhttp.StatusCreated, createCheckoutResponse.Code)
+	require.Equal(t, stdhttp.StatusAccepted, createCheckoutResponse.Code)
 
 	createBillingRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
 		"goal": "investigate billing errors",
@@ -103,7 +145,7 @@ func TestRouterListsAnalysesWithPaginationMetadata(t *testing.T) {
 	}`))
 	createBillingResponse := httptest.NewRecorder()
 	router.ServeHTTP(createBillingResponse, createBillingRequest)
-	require.Equal(t, stdhttp.StatusCreated, createBillingResponse.Code)
+	require.Equal(t, stdhttp.StatusAccepted, createBillingResponse.Code)
 
 	listRequest := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses?service=checkout-service&limit=1", nil)
 	listResponse := httptest.NewRecorder()
@@ -288,7 +330,7 @@ func TestRouterReturnsPersistedChatHistory(t *testing.T) {
 	}`))
 	createResponse := httptest.NewRecorder()
 	router.ServeHTTP(createResponse, createRequest)
-	require.Equal(t, stdhttp.StatusCreated, createResponse.Code)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
 
 	chatRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses/analysis-000001/chat", bytes.NewBufferString(`{
 		"question": "Which evidence supports this analysis?"
@@ -322,7 +364,15 @@ func TestRouterExposesMetricsEndpoint(t *testing.T) {
 }
 
 func newTestRouter() stdhttp.Handler {
+	router, _ := newTestRouterWithBackend()
+	return router
+}
+
+func newTestRouterWithBackend() (stdhttp.Handler, *fake.AnalysisJobRepository) {
 	repository := fake.NewAnalysisRepository()
+	jobRepository := fake.NewAnalysisJobRepository()
+	enqueuer := fake.NewSynchronousJobEnqueuer()
+
 	analysis := usecase.NewAnalysis(
 		fake.NewSignalCollector(),
 		fake.NewAnalysisGenerator(),
@@ -330,10 +380,13 @@ func newTestRouter() stdhttp.Handler {
 		fake.NewAnalysisContextCache(),
 		6*time.Hour,
 		fake.NewIDGenerator("analysis"),
-	)
-	chat := usecase.NewChat(repository, fake.NewAnalysisContextCache(), 6*time.Hour, repository, fake.NewChatResponder())
+	).WithAsyncBackend(jobRepository, enqueuer)
+	enqueuer.SetHandler(analysis.RunAnalysisJob)
 
-	return NewRouter(analysis, chat, RouterOptions{
+	chat := usecase.NewChat(repository, fake.NewAnalysisContextCache(), 6*time.Hour, repository, fake.NewChatResponder()).
+		WithLocker(fake.NewAnalysisLocker())
+
+	router := NewRouter(analysis, chat, RouterOptions{
 		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		RequestTimeout:     5 * time.Second,
 		MaxRequestBodyByte: 1 << 20,
@@ -341,4 +394,5 @@ func newTestRouter() stdhttp.Handler {
 			writer.WriteHeader(stdhttp.StatusOK)
 		}),
 	})
+	return router, jobRepository
 }

@@ -77,7 +77,12 @@ paths:
   /v1/analyses:
     post:
       tags: [analysis]
-      summary: Create a new analysis.
+      summary: Submit a new asynchronous analysis job.
+      description: |
+        Validates the request, creates a `pending` job and returns immediately
+        with `202 Accepted`. The client must poll `GET /v1/jobs/{jobID}` until
+        the status becomes `completed` or `failed`. The same identifier is
+        reused as the final analysis identifier once the worker finishes.
       requestBody:
         required: true
         content:
@@ -96,12 +101,16 @@ paths:
                   signals: ["metrics", "logs", "traces"]
                   context: Deploy completed at 07:55 UTC.
       responses:
-        "201":
-          description: Analysis created.
+        "202":
+          description: Analysis job accepted; poll the Location URL for completion.
+          headers:
+            Location:
+              schema: { type: string }
+              description: URL where the job status can be polled.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/WrapperDtoResponde_AnalysisResponseDto"
+                $ref: "#/components/schemas/WrapperDtoResponde_AnalysisJobAcceptedDto"
         "400":
           $ref: "#/components/responses/BadRequest"
         "413":
@@ -139,6 +148,34 @@ paths:
                 $ref: "#/components/schemas/WrapperDtoResponde_AnalysisListResponseDto"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/jobs/{jobID}:
+    parameters:
+      - in: path
+        name: jobID
+        required: true
+        schema: { type: string }
+    get:
+      tags: [analysis]
+      summary: Retrieve the status of an asynchronous analysis job.
+      description: |
+        Always returns 200 while the job exists; clients inspect `data.status`
+        to differentiate pending, running, completed or failed jobs. When the
+        job completes, `data.analysisId` points to the final analysis URL.
+      responses:
+        "200":
+          description: Job state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_AnalysisJobStatusDto"
+        "404":
+          description: Job not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
         "500":
           $ref: "#/components/responses/InternalError"
   /v1/analyses/{analysisID}:
@@ -402,6 +439,7 @@ components:
             - invalid_request
             - analysis_not_found
             - analysis_context_not_found
+            - analysis_job_not_found
             - request_body_too_large
             - request_canceled
             - request_timeout
@@ -635,5 +673,59 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/ErrorResponse"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    AnalysisJobAcceptedDto:
+      type: object
+      required: [jobId, status, statusUrl]
+      properties:
+        jobId: { type: string }
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        statusUrl:
+          type: string
+          description: Relative URL the client should poll until the job finishes.
+    AnalysisJobStatusDto:
+      type: object
+      required: [jobId, status, attempt, createdAt]
+      properties:
+        jobId: { type: string }
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        analysisId:
+          type: string
+          description: Populated once the job completes; same value as `jobId`.
+        analysisUrl:
+          type: string
+          description: Relative URL for the final analysis once the job completes.
+        errorMessage:
+          type: string
+          description: Populated only when status is `failed`.
+        attempt: { type: integer }
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+    WrapperDtoResponde_AnalysisJobAcceptedDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/AnalysisJobAcceptedDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_AnalysisJobStatusDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/AnalysisJobStatusDto"
         metadata:
           $ref: "#/components/schemas/ResponseMetadata"

@@ -233,6 +233,52 @@ OBSERVAI_ENV=local
 OBSERVAI_DATABASE_DSN=postgres://observai:observai@localhost:5432/observai?sslmode=disable
 OBSERVAI_REDIS_URL=redis://localhost:6379/0
 OBSERVAI_ANALYSIS_CONTEXT_CACHE_TTL=6h
+OBSERVAI_QUEUE_CONCURRENCY=5
+OBSERVAI_QUEUE_DEQUEUE_TIMEOUT=5s
+OBSERVAI_CHAT_LOCK_TTL=60s
+OBSERVAI_CHAT_LOCK_WAIT=30s
+```
+
+## Async analysis and concurrent chat
+
+Analyses run asynchronously to keep request latency low and the LLM provider under
+backpressure even when many users hit the API at the same time.
+
+```txt
+POST /v1/analyses
+  -> 202 Accepted, body: { jobId, status, statusUrl }, header: Location: /v1/jobs/{jobId}
+
+GET /v1/jobs/{jobId}
+  -> 200 with { status: pending|running|completed|failed, analysisId? }
+
+GET /v1/analyses/{analysisId}
+  -> 200 with the final analysis once the job is completed
+```
+
+The same identifier flows through the lifecycle: `jobId` and `analysisId` are
+equal once the worker finishes. `OBSERVAI_QUEUE_CONCURRENCY` caps how many
+analyses execute in parallel on a single instance.
+
+Chat (`POST /v1/analyses/{id}/chat`) stays synchronous from the client's point
+of view but is serialized per analysis through a Redis lock (in-process mutex
+when Redis is not configured). Concurrent questions about the same analysis
+hit the LLM in FIFO order; questions about different analyses run in parallel.
+See `docs/architecture/concurrency.md` for the full model.
+
+## Run locally with live reload
+
+Air is registered as a Go tool and uses `.air.toml` from the repository root.
+
+```bash
+go tool air
+```
+
+By default, the API runs in local mode with in-memory fallbacks when external
+dependencies are not configured. To run Air with the example YAML configuration,
+start the local dependencies and pass `OBSERVAI_CONFIG_FILE`:
+
+```bash
+OBSERVAI_CONFIG_FILE=config/config.example.yaml go tool air
 ```
 
 ---

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -25,12 +26,18 @@ type Analysis struct {
 	cache           ports.AnalysisContextCache
 	cacheTTL        time.Duration
 	ids             ports.IDGenerator
+	jobs            ports.AnalysisJobRepository
+	enqueuer        ports.JobEnqueuer
 	severity        policy.SeverityPolicy
 	recommendations policy.RecommendationPolicy
 	now             func() time.Time
 }
 
 // NewAnalysis creates an analysis use case.
+//
+// jobs and enqueuer are optional collaborators. When nil, the use case still
+// exposes the synchronous Analyze entrypoint but SubmitAnalysis returns an
+// error because async submission requires both dependencies.
 func NewAnalysis(
 	collector ports.SignalCollector,
 	generator ports.AnalysisGenerator,
@@ -56,8 +63,118 @@ func NewAnalysis(
 	}
 }
 
-// Analyze executes a provider-agnostic observability analysis.
+// WithAsyncBackend attaches the job repository and enqueuer required for
+// asynchronous analysis submission. Returns the same use case for chaining.
+func (useCase *Analysis) WithAsyncBackend(jobs ports.AnalysisJobRepository, enqueuer ports.JobEnqueuer) *Analysis {
+	useCase.jobs = jobs
+	useCase.enqueuer = enqueuer
+	return useCase
+}
+
+// Analyze executes a provider-agnostic observability analysis synchronously.
+//
+// It is preserved for in-process callers (the async worker, integration tests)
+// that already hold an [domain.AnalysisRequest] and do not need the job lifecycle.
 func (useCase *Analysis) Analyze(ctx context.Context, request domain.AnalysisRequest) (domain.AnalysisResult, error) {
+	if err := request.Validate(); err != nil {
+		return domain.AnalysisResult{}, err
+	}
+	id, err := useCase.ids.NextID(ctx)
+	if err != nil {
+		return domain.AnalysisResult{}, fmt.Errorf("create analysis id: %w", err)
+	}
+	return useCase.executeAnalyze(ctx, id, request)
+}
+
+// SubmitAnalysis validates the request, creates a pending job and enqueues it.
+//
+// Callers must poll GetJob to observe completion. The asynchronous backend
+// (AnalysisJobRepository and JobEnqueuer) must have been attached via
+// WithAsyncBackend before calling this method.
+func (useCase *Analysis) SubmitAnalysis(ctx context.Context, request domain.AnalysisRequest) (domain.AnalysisJob, error) {
+	if useCase.jobs == nil || useCase.enqueuer == nil {
+		return domain.AnalysisJob{}, errors.New("analysis async backend not configured")
+	}
+	if err := request.Validate(); err != nil {
+		return domain.AnalysisJob{}, err
+	}
+
+	jobID, err := useCase.ids.NextID(ctx)
+	if err != nil {
+		return domain.AnalysisJob{}, fmt.Errorf("create analysis job id: %w", err)
+	}
+
+	job := domain.AnalysisJob{
+		ID:        jobID,
+		Status:    domain.JobStatusPending,
+		Request:   request,
+		CreatedAt: useCase.now().UTC(),
+	}
+	if err := useCase.jobs.Create(ctx, job); err != nil {
+		return domain.AnalysisJob{}, fmt.Errorf("create analysis job: %w", err)
+	}
+
+	if err := useCase.enqueuer.EnqueueAnalysis(ctx, job.ID); err != nil {
+		return domain.AnalysisJob{}, fmt.Errorf("enqueue analysis job: %w", err)
+	}
+
+	return job, nil
+}
+
+// GetJob returns the current state of an asynchronous analysis job.
+func (useCase *Analysis) GetJob(ctx context.Context, jobID string) (domain.AnalysisJob, error) {
+	if useCase.jobs == nil {
+		return domain.AnalysisJob{}, errors.New("analysis async backend not configured")
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return domain.AnalysisJob{}, fmt.Errorf("%w: job id is required", domain.ErrJobNotFound)
+	}
+
+	job, err := useCase.jobs.Find(ctx, jobID)
+	if err != nil {
+		return domain.AnalysisJob{}, err
+	}
+	return job, nil
+}
+
+// RunAnalysisJob loads the pending job, executes the analysis and records the outcome.
+//
+// Workers (asynq handler, in-memory worker) invoke this method to perform the
+// real work after a producer enqueued the job identifier.
+func (useCase *Analysis) RunAnalysisJob(ctx context.Context, jobID string) error {
+	if useCase.jobs == nil {
+		return errors.New("analysis async backend not configured")
+	}
+
+	job, err := useCase.jobs.Find(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("load analysis job: %w", err)
+	}
+	if job.Status == domain.JobStatusCompleted {
+		return nil
+	}
+
+	if err := useCase.jobs.MarkRunning(ctx, jobID, useCase.now().UTC()); err != nil {
+		return fmt.Errorf("mark analysis job running: %w", err)
+	}
+
+	result, runErr := useCase.executeAnalyze(ctx, jobID, job.Request)
+	if runErr != nil {
+		failedAt := useCase.now().UTC()
+		if markErr := useCase.jobs.MarkFailed(ctx, jobID, runErr.Error(), failedAt); markErr != nil {
+			return fmt.Errorf("mark analysis job failed after %v: %w", runErr, markErr)
+		}
+		return runErr
+	}
+
+	if err := useCase.jobs.MarkCompleted(ctx, jobID, result.ID, useCase.now().UTC()); err != nil {
+		return fmt.Errorf("mark analysis job completed: %w", err)
+	}
+	return nil
+}
+
+func (useCase *Analysis) executeAnalyze(ctx context.Context, analysisID string, request domain.AnalysisRequest) (domain.AnalysisResult, error) {
 	if err := request.Validate(); err != nil {
 		return domain.AnalysisResult{}, err
 	}
@@ -74,12 +191,7 @@ func (useCase *Analysis) Analyze(ctx context.Context, request domain.AnalysisReq
 		return domain.AnalysisResult{}, fmt.Errorf("generate analysis: %w", err)
 	}
 
-	id, err := useCase.ids.NextID(ctx)
-	if err != nil {
-		return domain.AnalysisResult{}, fmt.Errorf("create analysis id: %w", err)
-	}
-
-	result.ID = id
+	result.ID = analysisID
 	result.Evidence = evidence
 	result.Severity = useCase.severity.Reconcile(result.Severity, policy.SeverityInput{
 		Request:  request,

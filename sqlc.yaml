@@ -3,6 +3,8 @@ sql:
   - engine: postgresql
     schema:
       - migrations/000001_create_analyses_and_chat_messages.up.sql
+      - migrations/000002_add_analyses_constraints_and_index.up.sql
+      - migrations/000003_create_analysis_jobs.up.sql
     queries:
       - internal/adapters/outbound/postgres/query
     gen:

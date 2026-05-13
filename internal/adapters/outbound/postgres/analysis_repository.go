@@ -54,6 +54,11 @@ func (repository *AnalysisRepository) Ping(ctx context.Context) error {
 	return repository.pool.Ping(ctx)
 }
 
+// Pool exposes the underlying connection pool so sibling repositories can share it.
+func (repository *AnalysisRepository) Pool() *pgxpool.Pool {
+	return repository.pool
+}
+
 func (repository *AnalysisRepository) observe(operation string, startedAt time.Time, err error) {
 	repository.observer.Observe("postgres", operation, time.Since(startedAt), err)
 }

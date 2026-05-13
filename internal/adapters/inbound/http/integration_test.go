@@ -44,7 +44,7 @@ func TestAnalysisChatEndToEnd_Integration(t *testing.T) {
 
 	var createdID string
 
-	t.Run("POST /v1/analyses creates analysis", func(t *testing.T) {
+	t.Run("POST /v1/analyses submits analysis job", func(t *testing.T) {
 		body := []byte(`{
 			"goal": "investigate checkout latency spike",
 			"timeWindow": {"start": "2026-05-13T08:00:00Z", "end": "2026-05-13T08:30:00Z"},
@@ -56,14 +56,26 @@ func TestAnalysisChatEndToEnd_Integration(t *testing.T) {
 		response := postJSON(t, client, baseURL+"/v1/analyses", body)
 		defer response.Body.Close()
 
-		require.Equal(t, stdhttp.StatusCreated, response.StatusCode)
+		require.Equal(t, stdhttp.StatusAccepted, response.StatusCode)
 		payload := decodeWrapper(t, response)
 		data := payload["data"].(map[string]any)
-		id, _ := data["id"].(string)
-		require.NotEmpty(t, id, "analysis id must be returned")
-		createdID = id
-		assert.NotEmpty(t, data["summary"])
-		assert.Contains(t, []any{"low", "medium", "high", "critical"}, data["severity"])
+		jobID, _ := data["jobId"].(string)
+		require.NotEmpty(t, jobID, "job id must be returned")
+		createdID = jobID
+	})
+
+	t.Run("GET /v1/jobs/{id} returns completed status", func(t *testing.T) {
+		require.NotEmpty(t, createdID)
+
+		response, err := client.Get(baseURL + "/v1/jobs/" + createdID)
+		require.NoError(t, err)
+		defer response.Body.Close()
+
+		require.Equal(t, stdhttp.StatusOK, response.StatusCode)
+		payload := decodeWrapper(t, response)
+		data := payload["data"].(map[string]any)
+		assert.Equal(t, "completed", data["status"])
+		assert.Equal(t, createdID, data["analysisId"])
 	})
 
 	t.Run("GET /v1/analyses/{id} returns the same analysis", func(t *testing.T) {

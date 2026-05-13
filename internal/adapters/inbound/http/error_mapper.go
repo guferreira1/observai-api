@@ -81,6 +81,14 @@ var domainErrorRules = []domainErrorRule{
 		},
 	},
 	{
+		match: func(err error) bool { return errors.Is(err, domain.ErrJobNotFound) },
+		response: httpErrorResponse{
+			status:  stdhttp.StatusNotFound,
+			code:    "analysis_job_not_found",
+			message: "analysis job not found",
+		},
+	},
+	{
 		match: func(err error) bool { return errors.Is(err, errRequestBodyTooLarge) },
 		response: httpErrorResponse{
 			status:  stdhttp.StatusRequestEntityTooLarge,

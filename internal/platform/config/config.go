@@ -81,6 +81,19 @@ type HTTPRateLimitConfig struct {
 	Burst             int     `yaml:"burst" env:"OBSERVAI_HTTP_RATE_LIMIT_BURST" env-default:"0"`
 }
 
+// QueueConfig configures the asynchronous analysis worker pool.
+//
+// Concurrency caps how many analyses may be running at once on this instance.
+// ChatLockTTL bounds how long a chat critical section may hold the per-analysis
+// lock before it is forcibly released; ChatLockWait is the maximum time a chat
+// request will wait for the lock before failing.
+type QueueConfig struct {
+	Concurrency    int           `yaml:"concurrency" env:"OBSERVAI_QUEUE_CONCURRENCY" env-default:"5"`
+	DequeueTimeout time.Duration `yaml:"dequeue_timeout" env:"OBSERVAI_QUEUE_DEQUEUE_TIMEOUT" env-default:"5s"`
+	ChatLockTTL    time.Duration `yaml:"chat_lock_ttl" env:"OBSERVAI_CHAT_LOCK_TTL" env-default:"60s"`
+	ChatLockWait   time.Duration `yaml:"chat_lock_wait" env:"OBSERVAI_CHAT_LOCK_WAIT" env-default:"30s"`
+}
+
 // Config contains application runtime configuration.
 type Config struct {
 	Port                    string              `yaml:"port" env:"OBSERVAI_API_PORT" env-default:"8080"`
@@ -93,6 +106,7 @@ type Config struct {
 	HTTPMaxBodyBytes        int64               `yaml:"http_max_body_bytes" env:"OBSERVAI_HTTP_MAX_BODY_BYTES" env-default:"1048576"`
 	HTTPShutdownTimeout     time.Duration       `yaml:"http_shutdown_timeout" env:"OBSERVAI_HTTP_SHUTDOWN_TIMEOUT" env-default:"30s"`
 	HTTPRateLimit           HTTPRateLimitConfig `yaml:"http_rate_limit"`
+	Queue                   QueueConfig         `yaml:"queue"`
 	Prometheus              PrometheusConfig    `yaml:"prometheus"`
 	Ollama                  OllamaConfig        `yaml:"ollama"`
 	Prompts                 PromptsConfig       `yaml:"prompts"`

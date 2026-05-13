@@ -81,8 +81,9 @@ func (router *Router) routes() {
 	}
 	router.mux.Get("/v1/openapi.yaml", router.handleOpenAPI)
 	router.mux.Get("/v1/analyses", router.handleListAnalyses)
-	router.mux.Post("/v1/analyses", router.handleCreateAnalysis)
+	router.mux.Post("/v1/analyses", router.handleSubmitAnalysis)
 	router.mux.Get("/v1/analyses/{analysisID}", router.handleGetAnalysis)
+	router.mux.Get("/v1/jobs/{jobID}", router.handleGetAnalysisJob)
 	router.mux.Post("/v1/analyses/{analysisID}/chat", router.handleChat)
 	router.mux.Get("/v1/analyses/{analysisID}/chat", router.handleChatHistory)
 
@@ -97,7 +98,7 @@ func (router *Router) handleHealth(writer stdhttp.ResponseWriter, request *stdht
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, HealthResponse{Status: "ok"})
 }
 
-func (router *Router) handleCreateAnalysis(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+func (router *Router) handleSubmitAnalysis(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 	startedAt := time.Now()
 	requestID := router.requestID(request)
 
@@ -112,15 +113,39 @@ func (router *Router) handleCreateAnalysis(writer stdhttp.ResponseWriter, reques
 		return
 	}
 
-	result, err := router.analysis.Analyze(request.Context(), toDomainAnalysisRequest(dto))
+	job, err := router.analysis.SubmitAnalysis(request.Context(), toDomainAnalysisRequest(dto))
 	if err != nil {
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
 
-	ctx := logger.With(request.Context(), slog.String("analysisId", result.ID))
+	ctx := logger.With(request.Context(), slog.String("jobId", job.ID))
 	*request = *request.WithContext(ctx)
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, toAnalysisResponseDto(result))
+
+	accepted := toAnalysisJobAcceptedDto(job)
+	writer.Header().Set("Location", accepted.StatusURL)
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusAccepted, accepted)
+}
+
+func (router *Router) handleGetAnalysisJob(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+	jobID := strings.TrimSpace(chi.URLParam(request, "jobID"))
+	if jobID == "" {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusNotFound, "analysis_job_not_found", "analysis job not found")
+		return
+	}
+
+	ctx := logger.With(request.Context(), slog.String("jobId", jobID))
+	*request = *request.WithContext(ctx)
+
+	job, err := router.analysis.GetJob(request.Context(), jobID)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toAnalysisJobStatusDto(job))
 }
 
 func (router *Router) handleListAnalyses(writer stdhttp.ResponseWriter, request *stdhttp.Request) {

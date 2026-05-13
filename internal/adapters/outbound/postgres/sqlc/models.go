@@ -32,3 +32,15 @@ type AnalysisChatMessage struct {
 	Evidence   []byte             `json:"evidence"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
+
+type AnalysisJob struct {
+	ID           string             `json:"id"`
+	AnalysisID   pgtype.Text        `json:"analysis_id"`
+	Status       string             `json:"status"`
+	Request      []byte             `json:"request"`
+	ErrorMessage string             `json:"error_message"`
+	Attempt      int32              `json:"attempt"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	StartedAt    pgtype.Timestamptz `json:"started_at"`
+	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+}

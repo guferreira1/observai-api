@@ -12,6 +12,12 @@ type noOpAnalysisContextCache struct{}
 
 type noOpChatHistoryRepository struct{}
 
+type noOpAnalysisLocker struct{}
+
+func (noOpAnalysisLocker) Acquire(_ context.Context, _ string) (func(), error) {
+	return func() {}, nil
+}
+
 func (noOpAnalysisContextCache) Save(context.Context, domain.AnalysisContext, time.Duration) error {
 	return nil
 }

@@ -27,6 +27,8 @@ func buildIntegrationServer(ctx context.Context, t *testing.T, dsn string) *http
 	require.NoError(t, err, "open postgres analysis repository")
 	t.Cleanup(repository.Close)
 
+	jobRepository := postgres.NewAnalysisJobRepository(repository.Pool())
+	enqueuer := fake.NewSynchronousJobEnqueuer()
 	analysisUseCase := usecase.NewAnalysis(
 		fake.NewSignalCollector(),
 		fake.NewAnalysisGenerator(),
@@ -34,14 +36,16 @@ func buildIntegrationServer(ctx context.Context, t *testing.T, dsn string) *http
 		fake.NewAnalysisContextCache(),
 		integrationAnalysisContextCacheTTL,
 		fake.NewIDGenerator("analysis"),
-	)
+	).WithAsyncBackend(jobRepository, enqueuer)
+	enqueuer.SetHandler(analysisUseCase.RunAnalysisJob)
+
 	chatUseCase := usecase.NewChat(
 		repository,
 		fake.NewAnalysisContextCache(),
 		integrationAnalysisContextCacheTTL,
 		repository,
 		fake.NewChatResponder(),
-	)
+	).WithLocker(fake.NewAnalysisLocker())
 
 	router := inboundhttp.NewRouter(analysisUseCase, chatUseCase, inboundhttp.RouterOptions{
 		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),

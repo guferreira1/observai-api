@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -59,6 +60,9 @@ func main() {
 	cache := newAnalysisContextCache(cfg, log, providerMetrics)
 	defer cache.close()
 
+	queue := newAnalysisQueue(cfg, log, providerMetrics)
+	defer queue.close()
+
 	ids := fake.NewIDGenerator("analysis")
 
 	providers, err := newProviders(cfg, log, providerMetrics)
@@ -74,14 +78,15 @@ func main() {
 		cache.contexts,
 		cfg.AnalysisContextCacheTTL,
 		ids,
-	)
+	).WithAsyncBackend(store.jobRepository, queue.enqueuer)
+
 	chatUseCase := usecase.NewChat(
 		store.repository,
 		cache.contexts,
 		cfg.AnalysisContextCacheTTL,
 		store.chatHistory,
 		providers.responder,
-	)
+	).WithLocker(queue.locker)
 
 	checker := health.NewChecker(2*time.Second, buildHealthProbes(store, cache, providers)...)
 
@@ -103,19 +108,30 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	var workerWaitGroup sync.WaitGroup
+	workerWaitGroup.Add(1)
+	go func() {
+		defer workerWaitGroup.Done()
+		log.Info("analysis worker starting", "concurrency", cfg.Queue.Concurrency)
+		queue.start(workerCtx, analysisUseCase.RunAnalysisJob, func(jobID string, runErr error) {
+			log.Error("analysis worker job failed", "jobId", jobID, "error", runErr)
+		})
+		log.Info("analysis worker stopped")
+	}()
+
 	serverErrors := make(chan error, 1)
 	go func() {
 		log.Info("starting observai api", "address", srv.Addr)
 		serverErrors <- srv.ListenAndServe()
 	}()
 
-	select {
-	case <-ctx.Done():
+	shutdown := func(reason string) {
 		shutdownTimeout := cfg.HTTPShutdownTimeout
 		if shutdownTimeout <= 0 {
 			shutdownTimeout = 30 * time.Second
 		}
-		log.Info("shutdown signal received, draining in-flight requests", "timeout", shutdownTimeout)
+		log.Info("shutdown sequence", "reason", reason, "timeout", shutdownTimeout)
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
@@ -125,12 +141,20 @@ func main() {
 			_ = srv.Close()
 		}
 
+		workerCancel()
+		workerWaitGroup.Wait()
+
 		if err := tracer.Shutdown(shutdownCtx); err != nil {
 			log.Error("tracer shutdown failed", "error", err)
 		}
+	}
 
+	select {
+	case <-ctx.Done():
+		shutdown("signal")
 		log.Info("server stopped")
 	case err := <-serverErrors:
+		shutdown("server error")
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server stopped with error", "error", err)
 			os.Exit(1)

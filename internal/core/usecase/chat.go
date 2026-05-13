@@ -17,6 +17,7 @@ type Chat struct {
 	cacheTTL   time.Duration
 	history    ports.ChatHistoryRepository
 	responder  ports.ChatResponder
+	locker     ports.AnalysisLocker
 	scope      chatScopePolicy
 	now        func() time.Time
 }
@@ -42,12 +43,27 @@ func NewChat(
 		cacheTTL:   cacheTTL,
 		history:    history,
 		responder:  responder,
+		locker:     noOpAnalysisLocker{},
 		scope:      defaultChatScopePolicy(),
 		now:        time.Now,
 	}
 }
 
+// WithLocker configures the analysis-scoped locker used to serialize concurrent
+// questions about the same analysis. When omitted, concurrent calls run freely.
+func (useCase *Chat) WithLocker(locker ports.AnalysisLocker) *Chat {
+	if locker == nil {
+		locker = noOpAnalysisLocker{}
+	}
+	useCase.locker = locker
+	return useCase
+}
+
 // Ask answers a question only when it is related to the active analysis.
+//
+// Concurrent calls for the same analysis identifier are serialized through the
+// configured locker so chat exchanges remain in order and the LLM observes a
+// coherent conversation per analysis.
 func (useCase *Chat) Ask(ctx context.Context, question domain.ChatQuestion) (domain.ChatAnswer, error) {
 	if strings.TrimSpace(question.AnalysisID) == "" {
 		return domain.ChatAnswer{}, fmt.Errorf("%w: analysis id is required", domain.ErrAnalysisNotFound)
@@ -61,6 +77,12 @@ func (useCase *Chat) Ask(ctx context.Context, question domain.ChatQuestion) (dom
 	if err != nil {
 		return domain.ChatAnswer{}, err
 	}
+
+	release, err := useCase.locker.Acquire(ctx, question.AnalysisID)
+	if err != nil {
+		return domain.ChatAnswer{}, fmt.Errorf("acquire analysis chat lock: %w", err)
+	}
+	defer release()
 
 	answer, err := useCase.responder.Answer(ctx, analysisContext, question)
 	if err != nil {

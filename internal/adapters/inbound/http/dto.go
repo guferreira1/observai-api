@@ -120,6 +120,26 @@ type RecommendationDto struct {
 	Priority  int    `json:"priority"`
 }
 
+// AnalysisJobAcceptedDto describes a job acceptance response (HTTP 202).
+type AnalysisJobAcceptedDto struct {
+	JobID     string `json:"jobId"`
+	Status    string `json:"status"`
+	StatusURL string `json:"statusUrl"`
+}
+
+// AnalysisJobStatusDto describes the lifecycle state of an asynchronous analysis job.
+type AnalysisJobStatusDto struct {
+	JobID        string     `json:"jobId"`
+	Status       string     `json:"status"`
+	AnalysisID   string     `json:"analysisId,omitempty"`
+	AnalysisURL  string     `json:"analysisUrl,omitempty"`
+	ErrorMessage string     `json:"errorMessage,omitempty"`
+	Attempt      int        `json:"attempt"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	StartedAt    *time.Time `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+}
+
 // ChatRequestDto describes a chat question for an active analysis.
 type ChatRequestDto struct {
 	Question string `json:"question" validate:"required"`
@@ -225,6 +245,31 @@ func toAnalysisListResponseDto(result domain.AnalysisList) AnalysisListResponseD
 	}
 
 	return AnalysisListResponseDto{Items: items}
+}
+
+func toAnalysisJobAcceptedDto(job domain.AnalysisJob) AnalysisJobAcceptedDto {
+	return AnalysisJobAcceptedDto{
+		JobID:     job.ID,
+		Status:    string(job.Status),
+		StatusURL: "/v1/jobs/" + job.ID,
+	}
+}
+
+func toAnalysisJobStatusDto(job domain.AnalysisJob) AnalysisJobStatusDto {
+	dto := AnalysisJobStatusDto{
+		JobID:        job.ID,
+		Status:       string(job.Status),
+		AnalysisID:   job.AnalysisID,
+		ErrorMessage: job.ErrorMessage,
+		Attempt:      job.Attempt,
+		CreatedAt:    job.CreatedAt,
+		StartedAt:    job.StartedAt,
+		FinishedAt:   job.FinishedAt,
+	}
+	if job.AnalysisID != "" {
+		dto.AnalysisURL = "/v1/analyses/" + job.AnalysisID
+	}
+	return dto
 }
 
 func toChatResponseDto(answer domain.ChatAnswer) ChatResponseDto {
