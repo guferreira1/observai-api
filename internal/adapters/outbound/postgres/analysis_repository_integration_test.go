@@ -95,6 +95,48 @@ func TestAnalysisRepositoryIntegrationFindReturnsNotFound(t *testing.T) {
 	assert.True(t, errors.Is(err, domain.ErrAnalysisNotFound))
 }
 
+func TestAnalysisRepositoryIntegrationListAnalyses(t *testing.T) {
+	t.Parallel()
+
+	repository := newIntegrationRepository(t)
+	ctx := context.Background()
+	oldAnalysisID := "test-analysis-repository-list-old"
+	newAnalysisID := "test-analysis-repository-list-new"
+
+	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
+		ID:               oldAnalysisID,
+		Summary:          "old checkout analysis",
+		Severity:         domain.SeverityMedium,
+		Confidence:       domain.ConfidenceMedium,
+		AffectedServices: []string{"checkout-service"},
+		CreatedAt:        time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC),
+	}))
+	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
+		ID:               newAnalysisID,
+		Summary:          "new checkout analysis",
+		Severity:         domain.SeverityHigh,
+		Confidence:       domain.ConfidenceHigh,
+		AffectedServices: []string{"checkout-service"},
+		CreatedAt:        time.Date(2026, 5, 12, 10, 0, 0, 0, time.UTC),
+	}))
+
+	t.Cleanup(func() {
+		_, err := repository.pool.Exec(context.Background(), "DELETE FROM analyses WHERE id = ANY($1)", []string{oldAnalysisID, newAnalysisID})
+		require.NoError(t, err)
+	})
+
+	result, err := repository.ListAnalyses(ctx, domain.AnalysisListFilter{
+		Limit:   1,
+		Service: "checkout-service",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Items)
+	assert.Equal(t, newAnalysisID, result.Items[0].ID)
+	assert.GreaterOrEqual(t, result.Total, 2)
+	assert.Equal(t, 1, result.Limit)
+	assert.Equal(t, 0, result.Offset)
+}
+
 func TestAnalysisRepositoryIntegrationSaveExchangeAndList(t *testing.T) {
 	t.Parallel()
 

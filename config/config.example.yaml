@@ -1,0 +1,5 @@
+port: "8080"
+env: local
+database_dsn: postgres://observai:observai@localhost:5432/observai?sslmode=disable
+redis_url: redis://localhost:6379/0
+analysis_context_cache_ttl: 6h

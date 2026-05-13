@@ -28,5 +28,14 @@ go.work.sum
 .env
 
 # Editor/IDE
- .idea/
- .vscode/
+.idea/
+.vscode/
+
+# Local AI assistant instructions
+AGENTS.md
+CLAUDE.md
+.codex/
+.claude/
+
+# Local development infrastructure
+docker/

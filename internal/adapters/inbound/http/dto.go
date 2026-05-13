@@ -37,8 +37,16 @@ type Pagination struct {
 
 // ErrorResponse describes an API error.
 type ErrorResponse struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string             `json:"code"`
+	Message string             `json:"message"`
+	Details []ErrorFieldDetail `json:"details,omitempty"`
+}
+
+// ErrorFieldDetail describes a per-field validation failure.
+type ErrorFieldDetail struct {
+	Field   string `json:"field"`
+	Rule    string `json:"rule"`
+	Message string `json:"message,omitempty"`
 }
 
 // HealthResponse describes service health.
@@ -77,17 +85,25 @@ type AnalysisResponseDto struct {
 	CreatedAt          time.Time                `json:"createdAt"`
 }
 
+// AnalysisListResponseDto describes a paginated analysis list response.
+type AnalysisListResponseDto struct {
+	Items []AnalysisResponseDto `json:"items"`
+}
+
 // EvidenceDto describes normalized evidence returned to API clients.
 type EvidenceDto struct {
-	Signal    string    `json:"signal"`
-	Service   string    `json:"service"`
-	Source    string    `json:"source"`
-	Name      string    `json:"name"`
-	Summary   string    `json:"summary"`
-	Observed  time.Time `json:"observed"`
-	Score     float64   `json:"score"`
-	Unit      string    `json:"unit,omitempty"`
-	Reference string    `json:"reference,omitempty"`
+	Signal     string            `json:"signal"`
+	Service    string            `json:"service"`
+	Source     string            `json:"source"`
+	Name       string            `json:"name"`
+	Summary    string            `json:"summary"`
+	Observed   time.Time         `json:"observed"`
+	Score      float64           `json:"score"`
+	Unit       string            `json:"unit,omitempty"`
+	Reference  string            `json:"reference,omitempty"`
+	Provider   string            `json:"provider,omitempty"`
+	Query      string            `json:"query,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // RootCauseHypothesisDto describes a possible root cause returned to API clients.
@@ -153,15 +169,18 @@ func toAnalysisResponseDto(result domain.AnalysisResult) AnalysisResponseDto {
 	evidence := make([]EvidenceDto, 0, len(result.Evidence))
 	for _, item := range result.Evidence {
 		evidence = append(evidence, EvidenceDto{
-			Signal:    string(item.Signal),
-			Service:   item.Service,
-			Source:    item.Source,
-			Name:      item.Name,
-			Summary:   item.Summary,
-			Observed:  item.Observed,
-			Score:     item.Score,
-			Unit:      item.Unit,
-			Reference: item.Reference,
+			Signal:     string(item.Signal),
+			Service:    item.Service,
+			Source:     item.Source,
+			Name:       item.Name,
+			Summary:    item.Summary,
+			Observed:   item.Observed,
+			Score:      item.Score,
+			Unit:       item.Unit,
+			Reference:  item.Reference,
+			Provider:   item.Provider,
+			Query:      item.Query,
+			Attributes: item.Attributes,
 		})
 	}
 
@@ -197,6 +216,15 @@ func toAnalysisResponseDto(result domain.AnalysisResult) AnalysisResponseDto {
 		MissingEvidence:    result.MissingEvidence,
 		CreatedAt:          result.CreatedAt,
 	}
+}
+
+func toAnalysisListResponseDto(result domain.AnalysisList) AnalysisListResponseDto {
+	items := make([]AnalysisResponseDto, 0, len(result.Items))
+	for _, item := range result.Items {
+		items = append(items, toAnalysisResponseDto(item))
+	}
+
+	return AnalysisListResponseDto{Items: items}
 }
 
 func toChatResponseDto(answer domain.ChatAnswer) ChatResponseDto {

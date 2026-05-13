@@ -12,20 +12,23 @@ import (
 	redisadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/redis"
 	"github.com/guferreira1/observai-api/internal/core/ports"
 	"github.com/guferreira1/observai-api/internal/platform/config"
+	"github.com/guferreira1/observai-api/internal/platform/observability"
 )
 
 type analysisStore struct {
 	repository  ports.AnalysisRepository
 	chatHistory ports.ChatHistoryRepository
 	close       func()
+	postgres    *postgres.AnalysisRepository
 }
 
 type analysisContextCache struct {
 	contexts ports.AnalysisContextCache
 	close    func()
+	redis    *redisadapter.AnalysisContextCache
 }
 
-func newAnalysisStore(cfg config.Config, log *slog.Logger) analysisStore {
+func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observability.ProviderObserver) analysisStore {
 	fakeRepository := fake.NewAnalysisRepository()
 	databaseDSN := strings.TrimSpace(cfg.DatabaseDSN)
 	if databaseDSN == "" {
@@ -38,7 +41,7 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger) analysisStore {
 	}
 
 	databaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	postgresRepository, err := postgres.NewAnalysisRepository(databaseCtx, databaseDSN)
+	postgresRepository, err := postgres.NewAnalysisRepository(databaseCtx, databaseDSN, postgres.RepositoryOptions{Observer: observer})
 	cancel()
 	if err != nil {
 		log.Error("postgres repository initialization failed", "error", err)
@@ -50,10 +53,11 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger) analysisStore {
 		repository:  postgresRepository,
 		chatHistory: postgresRepository,
 		close:       postgresRepository.Close,
+		postgres:    postgresRepository,
 	}
 }
 
-func newAnalysisContextCache(cfg config.Config, log *slog.Logger) analysisContextCache {
+func newAnalysisContextCache(cfg config.Config, log *slog.Logger, observer observability.ProviderObserver) analysisContextCache {
 	redisURL := strings.TrimSpace(cfg.RedisURL)
 	if redisURL == "" {
 		log.Warn("redis analysis context cache disabled; using in-memory cache")
@@ -64,7 +68,7 @@ func newAnalysisContextCache(cfg config.Config, log *slog.Logger) analysisContex
 	}
 
 	redisCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	redisCache, err := redisadapter.NewAnalysisContextCache(redisCtx, redisURL)
+	redisCache, err := redisadapter.NewAnalysisContextCache(redisCtx, redisURL, redisadapter.CacheOptions{Observer: observer})
 	cancel()
 	if err != nil {
 		log.Error("redis analysis context cache initialization failed", "error", err)
@@ -79,5 +83,6 @@ func newAnalysisContextCache(cfg config.Config, log *slog.Logger) analysisContex
 				log.Error("redis analysis context cache close failed", "error", err)
 			}
 		},
+		redis: redisCache,
 	}
 }

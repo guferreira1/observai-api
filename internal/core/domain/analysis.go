@@ -8,8 +8,14 @@ import (
 // ErrInvalidAnalysisRequest indicates that an analysis request cannot be executed.
 var ErrInvalidAnalysisRequest = errors.New("invalid analysis request")
 
+// ErrInvalidAnalysisFilter indicates that analysis listing parameters are invalid.
+var ErrInvalidAnalysisFilter = errors.New("invalid analysis filter")
+
 // ErrAnalysisNotFound indicates that an analysis identifier does not exist.
 var ErrAnalysisNotFound = errors.New("analysis not found")
+
+// ErrInvalidChatQuestion indicates that a chat question payload is invalid.
+var ErrInvalidChatQuestion = errors.New("invalid chat question")
 
 // ErrQuestionOutOfScope indicates that a chat question is unrelated to the active analysis.
 var ErrQuestionOutOfScope = errors.New("question out of analysis scope")
@@ -75,16 +81,22 @@ type AnalysisRequest struct {
 }
 
 // Evidence describes a normalized observation used by the analysis engine.
+//
+// Fields are provider-agnostic: adapters must translate any provider-specific
+// payload into these fields before returning evidence to the use case.
 type Evidence struct {
-	Signal    SignalType
-	Service   string
-	Source    string
-	Name      string
-	Summary   string
-	Observed  time.Time
-	Score     float64
-	Unit      string
-	Reference string
+	Signal     SignalType
+	Service    string
+	Source     string
+	Name       string
+	Summary    string
+	Observed   time.Time
+	Score      float64
+	Unit       string
+	Reference  string
+	Provider   string
+	Query      string
+	Attributes map[string]string
 }
 
 // RootCauseHypothesis describes a possible cause and the evidence that supports it.
@@ -115,6 +127,22 @@ type AnalysisResult struct {
 	CodeLevelInsights  []string
 	MissingEvidence    []string
 	CreatedAt          time.Time
+}
+
+// AnalysisListFilter describes provider-agnostic analysis list filters.
+type AnalysisListFilter struct {
+	Limit    int
+	Offset   int
+	Severity Severity
+	Service  string
+}
+
+// AnalysisList describes a paginated list of stored analyses.
+type AnalysisList struct {
+	Items  []AnalysisResult
+	Limit  int
+	Offset int
+	Total  int
 }
 
 // AnalysisContext describes the compact analysis state used for scoped follow-up chat.

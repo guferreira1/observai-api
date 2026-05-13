@@ -206,29 +206,33 @@ ObservAI API is observability-provider agnostic.
 
 ---
 
-## Environment variables
+## Configuration
+
+ObservAI can read configuration from a YAML file and still allow environment variables to override individual values.
+
+```bash
+OBSERVAI_CONFIG_FILE=config/config.example.yaml go run ./cmd/observai-api
+```
+
+Example YAML:
+
+```yaml
+port: "8080"
+env: local
+database_dsn: postgres://observai:observai@localhost:5432/observai?sslmode=disable
+redis_url: redis://localhost:6379/0
+analysis_context_cache_ttl: 6h
+```
+
+Environment variables remain supported:
 
 ```env
+OBSERVAI_CONFIG_FILE=config/config.example.yaml
 OBSERVAI_API_PORT=8080
 OBSERVAI_ENV=local
-
-POSTGRES_USER=observai
-POSTGRES_PASSWORD=observai
-POSTGRES_DB=observai
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-
-REDIS_URL=redis://redis:6379
-
-OBSERVAI_ENCRYPTION_KEY=change-me
-OBSERVAI_JWT_SECRET=change-me
-
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
-GEMINI_API_KEY=
-OPENROUTER_API_KEY=
-
-OLLAMA_BASE_URL=http://ollama:11434
+OBSERVAI_DATABASE_DSN=postgres://observai:observai@localhost:5432/observai?sslmode=disable
+OBSERVAI_REDIS_URL=redis://localhost:6379/0
+OBSERVAI_ANALYSIS_CONTEXT_CACHE_TTL=6h
 ```
 
 ---
@@ -250,6 +254,18 @@ Health check:
 ```txt
 http://localhost:8080/health
 ```
+
+---
+
+## Database migrations
+
+Migrations use golang-migrate and live in `migrations/`.
+
+```bash
+migrate -path migrations -database "$OBSERVAI_DATABASE_DSN" up
+```
+
+SQL queries prepared for sqlc live under `internal/adapters/outbound/postgres/query`.
 
 ---
 

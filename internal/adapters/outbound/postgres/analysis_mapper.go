@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/postgres/sqlc"
 	"github.com/guferreira1/observai-api/internal/core/domain"
@@ -73,6 +74,46 @@ func toDomainAnalysisResult(row sqlc.FindAnalysisRow) (domain.AnalysisResult, er
 	return result, nil
 }
 
+func toDomainAnalysisResultFromList(row sqlc.ListAnalysesRow) (domain.AnalysisResult, error) {
+	var result domain.AnalysisResult
+
+	if err := json.Unmarshal(row.Evidence, &result.Evidence); err != nil {
+		return domain.AnalysisResult{}, fmt.Errorf("unmarshal analysis evidence: %w", err)
+	}
+
+	if err := json.Unmarshal(row.PossibleRootCauses, &result.PossibleRootCauses); err != nil {
+		return domain.AnalysisResult{}, fmt.Errorf("unmarshal analysis root causes: %w", err)
+	}
+
+	if err := json.Unmarshal(row.RecommendedActions, &result.RecommendedActions); err != nil {
+		return domain.AnalysisResult{}, fmt.Errorf("unmarshal analysis recommendations: %w", err)
+	}
+
+	result.ID = row.ID
+	result.Summary = row.Summary
+	result.Severity = domain.Severity(row.Severity)
+	result.Confidence = domain.Confidence(row.Confidence)
+	result.AffectedServices = row.AffectedServices
+	result.DetectedAnomalies = row.DetectedAnomalies
+	result.CodeLevelInsights = row.CodeLevelInsights
+	result.MissingEvidence = row.MissingEvidence
+	result.CreatedAt = row.CreatedAt.Time.UTC()
+
+	return result, nil
+}
+
+type analysisFilterParams struct {
+	severity pgtype.Text
+	service  pgtype.Text
+}
+
+func toAnalysisFilterParams(filter domain.AnalysisListFilter) analysisFilterParams {
+	return analysisFilterParams{
+		severity: optionalText(string(filter.Severity)),
+		service:  optionalText(filter.Service),
+	}
+}
+
 func toCreateChatMessageParams(message domain.ChatMessage) (sqlc.CreateChatMessageParams, error) {
 	evidence, err := marshalSlice(message.Evidence)
 	if err != nil {
@@ -117,4 +158,13 @@ func nonNilStrings(values []string) []string {
 	}
 
 	return values
+}
+
+func optionalText(value string) pgtype.Text {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return pgtype.Text{}
+	}
+
+	return pgtype.Text{String: value, Valid: true}
 }

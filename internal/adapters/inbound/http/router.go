@@ -2,10 +2,11 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	stdhttp "net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -13,7 +14,18 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
+	"github.com/guferreira1/observai-api/internal/platform/logger"
 )
+
+// RouterOptions configures cross-cutting HTTP behavior shared by every route.
+type RouterOptions struct {
+	Logger             *slog.Logger
+	RequestTimeout     time.Duration
+	MaxRequestBodyByte int64
+	Metrics            stdhttp.Handler
+	Liveness           stdhttp.Handler
+	Readiness          stdhttp.Handler
+}
 
 // Router handles HTTP requests for ObservAI API.
 type Router struct {
@@ -21,18 +33,23 @@ type Router struct {
 	analysis *usecase.Analysis
 	chat     *usecase.Chat
 	validate *validator.Validate
-	nextID   atomic.Uint64
-	metrics  stdhttp.Handler
+	logger   *slog.Logger
+	options  RouterOptions
 }
 
 // NewRouter creates the ObservAI HTTP router.
-func NewRouter(analysis *usecase.Analysis, chat *usecase.Chat, metrics stdhttp.Handler) *Router {
+func NewRouter(analysis *usecase.Analysis, chat *usecase.Chat, opts RouterOptions) *Router {
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+
 	router := &Router{
 		mux:      chi.NewRouter(),
 		analysis: analysis,
 		chat:     chat,
 		validate: validator.New(validator.WithRequiredStructEnabled()),
-		metrics:  metrics,
+		logger:   opts.Logger,
+		options:  opts,
 	}
 
 	router.routes()
@@ -45,12 +62,30 @@ func (router *Router) ServeHTTP(writer stdhttp.ResponseWriter, request *stdhttp.
 }
 
 func (router *Router) routes() {
-	router.mux.Use(middleware.Recoverer)
+	router.mux.Use(middleware.RequestID)
+	router.mux.Use(requestIDMiddleware)
+	router.mux.Use(middleware.RealIP)
+	router.mux.Use(loggerMiddleware(router.logger))
+	router.mux.Use(recoverMiddleware(router.logger))
+	router.mux.Use(bodyLimitMiddleware(router.options.MaxRequestBodyByte))
+	router.mux.Use(timeoutMiddleware(router.options.RequestTimeout))
+
 	router.mux.Get("/health", router.handleHealth)
+	if router.options.Liveness != nil {
+		router.mux.Method(stdhttp.MethodGet, "/healthz", router.options.Liveness)
+	}
+	if router.options.Readiness != nil {
+		router.mux.Method(stdhttp.MethodGet, "/readyz", router.options.Readiness)
+	}
+	router.mux.Get("/v1/analyses", router.handleListAnalyses)
 	router.mux.Post("/v1/analyses", router.handleCreateAnalysis)
+	router.mux.Get("/v1/analyses/{analysisID}", router.handleGetAnalysis)
 	router.mux.Post("/v1/analyses/{analysisID}/chat", router.handleChat)
 	router.mux.Get("/v1/analyses/{analysisID}/chat", router.handleChatHistory)
-	router.mux.Handle("/metrics", router.metrics)
+
+	if router.options.Metrics != nil {
+		router.mux.Handle("/metrics", router.options.Metrics)
+	}
 }
 
 func (router *Router) handleHealth(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -70,7 +105,7 @@ func (router *Router) handleCreateAnalysis(writer stdhttp.ResponseWriter, reques
 	}
 
 	if err := router.validate.Struct(dto); err != nil {
-		router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_request", "request validation failed")
+		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
 
@@ -80,7 +115,56 @@ func (router *Router) handleCreateAnalysis(writer stdhttp.ResponseWriter, reques
 		return
 	}
 
+	ctx := logger.With(request.Context(), slog.String("analysisId", result.ID))
+	*request = *request.WithContext(ctx)
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, toAnalysisResponseDto(result))
+}
+
+func (router *Router) handleListAnalyses(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	filter, err := parseAnalysisListFilter(request)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	result, err := router.analysis.List(request.Context(), filter)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	router.writeSuccessWithPagination(
+		writer,
+		requestID,
+		startedAt,
+		stdhttp.StatusOK,
+		toAnalysisListResponseDto(result),
+		toPagination(request, result),
+	)
+}
+
+func (router *Router) handleGetAnalysis(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+	analysisID := strings.TrimSpace(chi.URLParam(request, "analysisID"))
+	if analysisID == "" {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusNotFound, "not_found", "analysis not found")
+		return
+	}
+
+	ctx := logger.With(request.Context(), slog.String("analysisId", analysisID))
+	*request = *request.WithContext(ctx)
+
+	result, err := router.analysis.Get(request.Context(), analysisID)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toAnalysisResponseDto(result))
 }
 
 func (router *Router) handleChat(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -92,6 +176,9 @@ func (router *Router) handleChat(writer stdhttp.ResponseWriter, request *stdhttp
 		return
 	}
 
+	ctx := logger.With(request.Context(), slog.String("analysisId", analysisID))
+	*request = *request.WithContext(ctx)
+
 	var dto ChatRequestDto
 	if err := json.NewDecoder(request.Body).Decode(&dto); err != nil {
 		router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_json", "request body must be valid JSON")
@@ -99,7 +186,7 @@ func (router *Router) handleChat(writer stdhttp.ResponseWriter, request *stdhttp
 	}
 
 	if err := router.validate.Struct(dto); err != nil {
-		router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_request", "request validation failed")
+		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
 
@@ -124,6 +211,9 @@ func (router *Router) handleChatHistory(writer stdhttp.ResponseWriter, request *
 		return
 	}
 
+	ctx := logger.With(request.Context(), slog.String("analysisId", analysisID))
+	*request = *request.WithContext(ctx)
+
 	messages, err := router.chat.History(request.Context(), analysisID)
 	if err != nil {
 		router.writeDomainError(writer, requestID, startedAt, err)
@@ -134,11 +224,15 @@ func (router *Router) handleChatHistory(writer stdhttp.ResponseWriter, request *
 }
 
 func (router *Router) writeDomainError(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, err error) {
-	response := mapDomainError(err)
-	router.writeError(writer, requestID, startedAt, response.status, response.code, response.message)
+	response := mapHTTPError(err)
+	router.writeErrorResponse(writer, requestID, startedAt, response)
 }
 
 func (router *Router) writeSuccess(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, status int, data any) {
+	router.writeSuccessWithPagination(writer, requestID, startedAt, status, data, nil)
+}
+
+func (router *Router) writeSuccessWithPagination(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, status int, data any, pagination *Pagination) {
 	router.writeJSON(writer, status, WrapperDtoResponde[any]{
 		Data: data,
 		Metadata: ResponseMetadata{
@@ -149,15 +243,25 @@ func (router *Router) writeSuccess(writer stdhttp.ResponseWriter, requestID stri
 				LLM:           "fake",
 				Mode:          "local",
 			},
+			Pagination: pagination,
 		},
 	})
 }
 
 func (router *Router) writeError(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, status int, code string, message string) {
-	router.writeJSON(writer, status, WrapperDtoResponde[ErrorResponse]{
+	router.writeErrorResponse(writer, requestID, startedAt, httpErrorResponse{
+		status:  status,
+		code:    code,
+		message: message,
+	})
+}
+
+func (router *Router) writeErrorResponse(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, response httpErrorResponse) {
+	router.writeJSON(writer, response.status, WrapperDtoResponde[ErrorResponse]{
 		Data: ErrorResponse{
-			Code:    code,
-			Message: message,
+			Code:    response.code,
+			Message: response.message,
+			Details: response.details,
 		},
 		Metadata: ResponseMetadata{
 			RequestID:        requestID,
@@ -176,11 +280,73 @@ func (router *Router) writeJSON(writer stdhttp.ResponseWriter, status int, paylo
 }
 
 func (router *Router) requestID(request *stdhttp.Request) string {
-	id := strings.TrimSpace(request.Header.Get("X-Request-Id"))
-	if id != "" {
-		return id
+	return requestIDFromContext(request.Context())
+}
+
+func parseAnalysisListFilter(request *stdhttp.Request) (domain.AnalysisListFilter, error) {
+	query := request.URL.Query()
+
+	limit, err := parseOptionalPositiveInt(query.Get("limit"), "limit")
+	if err != nil {
+		return domain.AnalysisListFilter{}, err
 	}
 
-	next := router.nextID.Add(1)
-	return "request-" + time.Now().UTC().Format("20060102150405") + "-" + strconv.FormatUint(next, 10)
+	offset, err := parseOptionalPositiveInt(query.Get("offset"), "offset")
+	if err != nil {
+		return domain.AnalysisListFilter{}, err
+	}
+
+	severity := domain.Severity(strings.TrimSpace(query.Get("severity")))
+	if severity != "" && !isValidSeverity(severity) {
+		return domain.AnalysisListFilter{}, fmt.Errorf("%w: severity %q is not supported", domain.ErrInvalidAnalysisFilter, severity)
+	}
+
+	return domain.AnalysisListFilter{
+		Limit:    limit,
+		Offset:   offset,
+		Severity: severity,
+		Service:  strings.TrimSpace(query.Get("service")),
+	}, nil
+}
+
+func parseOptionalPositiveInt(raw string, name string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%w: %s must be a non-negative integer", domain.ErrInvalidAnalysisFilter, name)
+	}
+
+	return value, nil
+}
+
+func isValidSeverity(severity domain.Severity) bool {
+	switch severity {
+	case domain.SeverityInfo, domain.SeverityLow, domain.SeverityMedium, domain.SeverityHigh, domain.SeverityCritical:
+		return true
+	default:
+		return false
+	}
+}
+
+func toPagination(request *stdhttp.Request, result domain.AnalysisList) *Pagination {
+	pagination := &Pagination{
+		Limit:  result.Limit,
+		Offset: result.Offset,
+	}
+
+	nextOffset := result.Offset + result.Limit
+	if nextOffset >= result.Total {
+		return pagination
+	}
+
+	query := request.URL.Query()
+	query.Set("limit", strconv.Itoa(result.Limit))
+	query.Set("offset", strconv.Itoa(nextOffset))
+	pagination.Next = request.URL.Path + "?" + query.Encode()
+
+	return pagination
 }

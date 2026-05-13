@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/guferreira1/observai-api/internal/core/domain"
+	"github.com/guferreira1/observai-api/internal/platform/observability"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
@@ -15,11 +16,17 @@ const analysisContextKeyPrefix = "observai:analysis-context:v1:"
 
 // AnalysisContextCache stores compact analysis contexts in Redis.
 type AnalysisContextCache struct {
-	client *redisclient.Client
+	client   *redisclient.Client
+	observer observability.ProviderObserver
+}
+
+// CacheOptions configures optional collaborators for the analysis context cache.
+type CacheOptions struct {
+	Observer observability.ProviderObserver
 }
 
 // NewAnalysisContextCache creates a Redis-backed analysis context cache.
-func NewAnalysisContextCache(ctx context.Context, redisURL string) (*AnalysisContextCache, error) {
+func NewAnalysisContextCache(ctx context.Context, redisURL string, opts ...CacheOptions) (*AnalysisContextCache, error) {
 	options, err := redisclient.ParseURL(redisURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse redis url: %w", err)
@@ -30,7 +37,17 @@ func NewAnalysisContextCache(ctx context.Context, redisURL string) (*AnalysisCon
 		return nil, fmt.Errorf("ping redis: %w", err)
 	}
 
-	return &AnalysisContextCache{client: client}, nil
+	observer := observability.ProviderObserver(observability.NoopProviderObserver{})
+	if len(opts) > 0 && opts[0].Observer != nil {
+		observer = opts[0].Observer
+	}
+
+	return &AnalysisContextCache{client: client, observer: observer}, nil
+}
+
+// Ping verifies connectivity to Redis with the supplied context.
+func (cache *AnalysisContextCache) Ping(ctx context.Context) error {
+	return cache.client.Ping(ctx).Err()
 }
 
 // Close releases Redis connections held by the cache.
@@ -43,7 +60,12 @@ func (cache *AnalysisContextCache) Close() error {
 }
 
 // Save stores an analysis context until the provided TTL expires.
-func (cache *AnalysisContextCache) Save(ctx context.Context, analysisContext domain.AnalysisContext, ttl time.Duration) error {
+func (cache *AnalysisContextCache) Save(ctx context.Context, analysisContext domain.AnalysisContext, ttl time.Duration) (err error) {
+	startedAt := time.Now()
+	defer func() {
+		cache.observer.Observe("redis", "save_analysis_context", time.Since(startedAt), err)
+	}()
+
 	payload, err := json.Marshal(analysisContext)
 	if err != nil {
 		return fmt.Errorf("marshal analysis context: %w", err)
@@ -57,7 +79,12 @@ func (cache *AnalysisContextCache) Save(ctx context.Context, analysisContext dom
 }
 
 // Find returns a cached analysis context by analysis identifier.
-func (cache *AnalysisContextCache) Find(ctx context.Context, analysisID string) (domain.AnalysisContext, error) {
+func (cache *AnalysisContextCache) Find(ctx context.Context, analysisID string) (analysisContext domain.AnalysisContext, err error) {
+	startedAt := time.Now()
+	defer func() {
+		cache.observer.Observe("redis", "find_analysis_context", time.Since(startedAt), err)
+	}()
+
 	payload, err := cache.client.Get(ctx, analysisContextKey(analysisID)).Bytes()
 	if errors.Is(err, redisclient.Nil) {
 		return domain.AnalysisContext{}, fmt.Errorf("%w: %s", domain.ErrAnalysisContextNotFound, analysisID)
@@ -66,7 +93,6 @@ func (cache *AnalysisContextCache) Find(ctx context.Context, analysisID string) 
 		return domain.AnalysisContext{}, fmt.Errorf("get analysis context cache: %w", err)
 	}
 
-	var analysisContext domain.AnalysisContext
 	if err := json.Unmarshal(payload, &analysisContext); err != nil {
 		return domain.AnalysisContext{}, fmt.Errorf("unmarshal analysis context: %w", err)
 	}

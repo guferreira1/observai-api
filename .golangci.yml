@@ -1,0 +1,40 @@
+run:
+  timeout: 5m
+  tests: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-dirs:
+    - internal/adapters/outbound/postgres/sqlc
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+    - gocyclo
+    - gosec
+    - bodyclose
+    - gofmt
+    - goimports
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  revive:
+    rules:
+      - name: var-naming
+      - name: exported
+        arguments:
+          - "disableStutteringCheck"
+      - name: unused-parameter
+        disabled: true
+  gosec:
+    excludes:
+      - G104

@@ -58,3 +58,30 @@ SELECT
     created_at
 FROM analyses
 WHERE id = $1;
+
+-- name: ListAnalyses :many
+SELECT
+    id,
+    summary,
+    severity,
+    confidence,
+    affected_services,
+    evidence,
+    detected_anomalies,
+    possible_root_causes,
+    recommended_actions,
+    code_level_insights,
+    missing_evidence,
+    created_at
+FROM analyses
+WHERE (sqlc.narg(severity)::text IS NULL OR severity = sqlc.narg(severity)::text)
+  AND (sqlc.narg(service)::text IS NULL OR sqlc.narg(service)::text = ANY(affected_services))
+ORDER BY created_at DESC, id ASC
+LIMIT sqlc.arg(result_limit)
+OFFSET sqlc.arg(result_offset);
+
+-- name: CountAnalyses :one
+SELECT count(*)::int
+FROM analyses
+WHERE (sqlc.narg(severity)::text IS NULL OR severity = sqlc.narg(severity)::text)
+  AND (sqlc.narg(service)::text IS NULL OR sqlc.narg(service)::text = ANY(affected_services));

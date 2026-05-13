@@ -11,6 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAnalyses = `-- name: CountAnalyses :one
+SELECT count(*)::int
+FROM analyses
+WHERE ($1::text IS NULL OR severity = $1::text)
+  AND ($2::text IS NULL OR $2::text = ANY(affected_services))
+`
+
+type CountAnalysesParams struct {
+	Severity pgtype.Text `json:"severity"`
+	Service  pgtype.Text `json:"service"`
+}
+
+func (q *Queries) CountAnalyses(ctx context.Context, arg CountAnalysesParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countAnalyses, arg.Severity, arg.Service)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const findAnalysis = `-- name: FindAnalysis :one
 SELECT
     id,
@@ -62,6 +81,88 @@ func (q *Queries) FindAnalysis(ctx context.Context, id string) (FindAnalysisRow,
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listAnalyses = `-- name: ListAnalyses :many
+SELECT
+    id,
+    summary,
+    severity,
+    confidence,
+    affected_services,
+    evidence,
+    detected_anomalies,
+    possible_root_causes,
+    recommended_actions,
+    code_level_insights,
+    missing_evidence,
+    created_at
+FROM analyses
+WHERE ($1::text IS NULL OR severity = $1::text)
+  AND ($2::text IS NULL OR $2::text = ANY(affected_services))
+ORDER BY created_at DESC, id ASC
+LIMIT $4
+OFFSET $3
+`
+
+type ListAnalysesParams struct {
+	Severity     pgtype.Text `json:"severity"`
+	Service      pgtype.Text `json:"service"`
+	ResultOffset int32       `json:"result_offset"`
+	ResultLimit  int32       `json:"result_limit"`
+}
+
+type ListAnalysesRow struct {
+	ID                 string             `json:"id"`
+	Summary            string             `json:"summary"`
+	Severity           string             `json:"severity"`
+	Confidence         string             `json:"confidence"`
+	AffectedServices   []string           `json:"affected_services"`
+	Evidence           []byte             `json:"evidence"`
+	DetectedAnomalies  []string           `json:"detected_anomalies"`
+	PossibleRootCauses []byte             `json:"possible_root_causes"`
+	RecommendedActions []byte             `json:"recommended_actions"`
+	CodeLevelInsights  []string           `json:"code_level_insights"`
+	MissingEvidence    []string           `json:"missing_evidence"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListAnalyses(ctx context.Context, arg ListAnalysesParams) ([]ListAnalysesRow, error) {
+	rows, err := q.db.Query(ctx, listAnalyses,
+		arg.Severity,
+		arg.Service,
+		arg.ResultOffset,
+		arg.ResultLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAnalysesRow{}
+	for rows.Next() {
+		var i ListAnalysesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Summary,
+			&i.Severity,
+			&i.Confidence,
+			&i.AffectedServices,
+			&i.Evidence,
+			&i.DetectedAnomalies,
+			&i.PossibleRootCauses,
+			&i.RecommendedActions,
+			&i.CodeLevelInsights,
+			&i.MissingEvidence,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const saveAnalysis = `-- name: SaveAnalysis :exec
