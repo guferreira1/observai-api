@@ -154,6 +154,14 @@ func main() {
 		analysisUseCase.WithCompletionNotifier(usecase.NewWebhookNotifier(webhookUseCase, log))
 	}
 
+	var setupUseCase *usecase.Setup
+	if userUseCase != nil && store.users != nil {
+		setupUseCase = usecase.NewSetup(store.users, userUseCase, providerInventoryFromConfig(cfg))
+		if auditLogUseCase != nil {
+			setupUseCase.WithAuditLog(auditLogUseCase)
+		}
+	}
+
 	checker := health.NewChecker(2*time.Second, buildHealthProbes(store, cache, providers)...)
 
 	capabilities := buildCapabilities(cfg, providers, version)
@@ -180,6 +188,7 @@ func main() {
 		},
 		Sessions:     authUseCase,
 		Users:        userUseCase,
+		Setup:        setupUseCase,
 		Metrics:      metricsHandler,
 		Liveness:     health.LivenessHandler(),
 		Readiness:    health.ReadinessHandler(checker),

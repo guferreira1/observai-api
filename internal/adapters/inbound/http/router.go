@@ -38,6 +38,7 @@ type RouterOptions struct {
 	Retention          *usecase.AnalysisRetention
 	Sessions           *usecase.Auth
 	Users              *usecase.User
+	Setup              *usecase.Setup
 }
 
 // Router handles HTTP requests for ObservAI API.
@@ -52,6 +53,7 @@ type Router struct {
 	retention *usecase.AnalysisRetention
 	sessions  *usecase.Auth
 	users     *usecase.User
+	setup     *usecase.Setup
 	validate  *validator.Validate
 	logger    *slog.Logger
 	options   RouterOptions
@@ -78,6 +80,7 @@ func NewRouter(analysis *usecase.Analysis, chat *usecase.Chat, opts RouterOption
 		retention: opts.Retention,
 		sessions:  opts.Sessions,
 		users:     opts.Users,
+		setup:     opts.Setup,
 		validate:  validator.New(validator.WithRequiredStructEnabled()),
 		logger:    opts.Logger,
 		options:   opts,
@@ -131,6 +134,11 @@ func (router *Router) routes() {
 	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat", writer(router.handleChat))
 	router.mux.Method(stdhttp.MethodGet, "/v1/analyses/{analysisID}/chat", reader(router.handleChatHistory))
 	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat/{messageID}/feedback", writer(router.handleChatFeedback))
+
+	if router.setup != nil {
+		router.mux.Method(stdhttp.MethodGet, "/v1/setup/status", stdhttp.HandlerFunc(router.handleSetupStatus))
+		router.mux.Method(stdhttp.MethodPost, "/v1/setup/admin", stdhttp.HandlerFunc(router.handleBootstrapAdmin))
+	}
 
 	if router.sessions != nil {
 		router.mux.Method(stdhttp.MethodPost, "/v1/auth/login", stdhttp.HandlerFunc(router.handleLogin))

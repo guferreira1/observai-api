@@ -78,6 +78,18 @@ func newProviders(cfg config.Config, log *slog.Logger, observer observability.Pr
 	}, nil
 }
 
+// providerInventoryFromConfig adapts the current configuration into a
+// snapshot for the Setup use case. W4 swaps this for a DB-backed
+// implementation without changing the use case contract.
+func providerInventoryFromConfig(cfg config.Config) coreports.ProviderInventory {
+	return coreports.ProviderInventoryFunc(func() coreports.ProviderInventorySnapshot {
+		return coreports.ProviderInventorySnapshot{
+			ObservabilityProviders: len(cfg.Observability.Providers),
+			LLMProviders:           len(cfg.LLM.Providers),
+		}
+	})
+}
+
 func toObservabilityProviders(capabilities []factory.ProviderCapability) []observabilityProvider {
 	if len(capabilities) == 0 {
 		return []observabilityProvider{{name: "none", signals: []string{}}}

@@ -259,6 +259,7 @@ func indexSkipPaths(values []string) map[string]bool {
 		"/health", "/healthz", "/readyz", "/metrics",
 		"/v1/openapi.yaml",
 		"/v1/auth/login", "/v1/auth/refresh",
+		"/v1/setup/status", "/v1/setup/admin",
 	}
 	index := make(map[string]bool, len(defaults)+len(values))
 	for _, path := range defaults {
