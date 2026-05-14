@@ -29,6 +29,8 @@ type analysisStore struct {
 	retention         ports.AnalysisRetention
 	users             ports.UserRepository
 	refreshTokens     ports.RefreshTokenRepository
+	providerConfigs   ports.ProviderConfigRepository
+	llmConfigs        ports.LLMConfigRepository
 	close             func()
 	postgres          *postgres.AnalysisRepository
 }
@@ -87,6 +89,8 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 	retentionRepository := postgres.NewAnalysisRetentionRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 	userRepository := postgres.NewUserRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 	refreshTokenRepository := postgres.NewRefreshTokenRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	providerConfigRepository := postgres.NewProviderConfigRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	llmConfigRepository := postgres.NewLLMConfigRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 	webhookDispatcher := webhooks.NewDispatcher(webhooks.DispatcherOptions{Logger: log, Observer: observer})
 
 	log.Info("postgres repository enabled")
@@ -102,6 +106,8 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 		retention:         retentionRepository,
 		users:             userRepository,
 		refreshTokens:     refreshTokenRepository,
+		providerConfigs:   providerConfigRepository,
+		llmConfigs:        llmConfigRepository,
 		close:             postgresRepository.Close,
 		postgres:          postgresRepository,
 	}

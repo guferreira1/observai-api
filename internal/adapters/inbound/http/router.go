@@ -39,24 +39,28 @@ type RouterOptions struct {
 	Sessions           *usecase.Auth
 	Users              *usecase.User
 	Setup              *usecase.Setup
+	ProviderConfigs    *usecase.ProviderConfig
+	LLMConfigs         *usecase.LLMConfig
 }
 
 // Router handles HTTP requests for ObservAI API.
 type Router struct {
-	mux       chi.Router
-	analysis  *usecase.Analysis
-	chat      *usecase.Chat
-	traces    *usecase.Trace
-	apiKeys   *usecase.APIKey
-	webhooks  *usecase.WebhookSubscriptions
-	auditLog  *usecase.AuditLog
-	retention *usecase.AnalysisRetention
-	sessions  *usecase.Auth
-	users     *usecase.User
-	setup     *usecase.Setup
-	validate  *validator.Validate
-	logger    *slog.Logger
-	options   RouterOptions
+	mux             chi.Router
+	analysis        *usecase.Analysis
+	chat            *usecase.Chat
+	traces          *usecase.Trace
+	apiKeys         *usecase.APIKey
+	webhooks        *usecase.WebhookSubscriptions
+	auditLog        *usecase.AuditLog
+	retention       *usecase.AnalysisRetention
+	sessions        *usecase.Auth
+	users           *usecase.User
+	setup           *usecase.Setup
+	providerConfigs *usecase.ProviderConfig
+	llmConfigs      *usecase.LLMConfig
+	validate        *validator.Validate
+	logger          *slog.Logger
+	options         RouterOptions
 }
 
 // NewRouter creates the ObservAI HTTP router.
@@ -70,20 +74,22 @@ func NewRouter(analysis *usecase.Analysis, chat *usecase.Chat, opts RouterOption
 	}
 
 	router := &Router{
-		mux:       chi.NewRouter(),
-		analysis:  analysis,
-		chat:      chat,
-		traces:    opts.Trace,
-		apiKeys:   opts.APIKeys,
-		webhooks:  opts.Webhooks,
-		auditLog:  opts.AuditLog,
-		retention: opts.Retention,
-		sessions:  opts.Sessions,
-		users:     opts.Users,
-		setup:     opts.Setup,
-		validate:  validator.New(validator.WithRequiredStructEnabled()),
-		logger:    opts.Logger,
-		options:   opts,
+		mux:             chi.NewRouter(),
+		analysis:        analysis,
+		chat:            chat,
+		traces:          opts.Trace,
+		apiKeys:         opts.APIKeys,
+		webhooks:        opts.Webhooks,
+		auditLog:        opts.AuditLog,
+		retention:       opts.Retention,
+		sessions:        opts.Sessions,
+		users:           opts.Users,
+		setup:           opts.Setup,
+		providerConfigs: opts.ProviderConfigs,
+		llmConfigs:      opts.LLMConfigs,
+		validate:        validator.New(validator.WithRequiredStructEnabled()),
+		logger:          opts.Logger,
+		options:         opts,
 	}
 
 	router.routes()
@@ -172,6 +178,25 @@ func (router *Router) routes() {
 		router.mux.Method(stdhttp.MethodGet, "/v1/admin/users/{userID}", admin(router.handleGetUser))
 		router.mux.Method(stdhttp.MethodPatch, "/v1/admin/users/{userID}", admin(router.handleUpdateUser))
 		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/users/{userID}", admin(router.handleDeleteUser))
+	}
+	if router.providerConfigs != nil {
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/providers", admin(router.handleListProviderConfigs))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers", admin(router.handleCreateProviderConfig))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/providers/{providerID}", admin(router.handleGetProviderConfig))
+		router.mux.Method(stdhttp.MethodPatch, "/v1/admin/providers/{providerID}", admin(router.handleUpdateProviderConfig))
+		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/providers/{providerID}", admin(router.handleDeleteProviderConfig))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers/{providerID}/test", admin(router.handleTestProviderConfig))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers/{providerID}/activate", admin(router.handleActivateProviderConfig))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers/{providerID}/deactivate", admin(router.handleDeactivateProviderConfig))
+	}
+	if router.llmConfigs != nil {
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/llm-providers", admin(router.handleListLLMConfigs))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers", admin(router.handleCreateLLMConfig))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/llm-providers/{llmID}", admin(router.handleGetLLMConfig))
+		router.mux.Method(stdhttp.MethodPatch, "/v1/admin/llm-providers/{llmID}", admin(router.handleUpdateLLMConfig))
+		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/llm-providers/{llmID}", admin(router.handleDeleteLLMConfig))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers/{llmID}/test", admin(router.handleTestLLMConfig))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers/{llmID}/activate", admin(router.handleActivateLLMConfig))
 	}
 
 	if router.options.Metrics != nil {

@@ -12,6 +12,7 @@ import (
 
 	inboundhttp "github.com/guferreira1/observai-api/internal/adapters/inbound/http"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/credentials"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/providertest"
 	uuidadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/uuid"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 	"github.com/guferreira1/observai-api/internal/platform/config"
@@ -154,9 +155,25 @@ func main() {
 		analysisUseCase.WithCompletionNotifier(usecase.NewWebhookNotifier(webhookUseCase, log))
 	}
 
+	var (
+		providerConfigUseCase *usecase.ProviderConfig
+		llmConfigUseCase      *usecase.LLMConfig
+	)
+	if store.providerConfigs != nil && store.llmConfigs != nil {
+		cipher, cipherErr := buildEncryptionCipher(cfg, log)
+		if cipherErr != nil {
+			log.Error("encryption cipher initialization failed", "error", cipherErr)
+			os.Exit(1)
+		}
+		tester := providertest.New()
+		providerConfigUseCase = usecase.NewProviderConfig(store.providerConfigs, cipher, tester, ids)
+		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, ids)
+	}
+
 	var setupUseCase *usecase.Setup
 	if userUseCase != nil && store.users != nil {
-		setupUseCase = usecase.NewSetup(store.users, userUseCase, providerInventoryFromConfig(cfg))
+		inventory := providerInventoryFromStores(store, cfg)
+		setupUseCase = usecase.NewSetup(store.users, userUseCase, inventory)
 		if auditLogUseCase != nil {
 			setupUseCase.WithAuditLog(auditLogUseCase)
 		}
@@ -186,13 +203,15 @@ func main() {
 			Domain: cfg.Cookies.Domain,
 			Secure: cfg.Cookies.Secure,
 		},
-		Sessions:     authUseCase,
-		Users:        userUseCase,
-		Setup:        setupUseCase,
-		Metrics:      metricsHandler,
-		Liveness:     health.LivenessHandler(),
-		Readiness:    health.ReadinessHandler(checker),
-		Capabilities: capabilities,
+		Sessions:        authUseCase,
+		Users:           userUseCase,
+		Setup:           setupUseCase,
+		ProviderConfigs: providerConfigUseCase,
+		LLMConfigs:      llmConfigUseCase,
+		Metrics:         metricsHandler,
+		Liveness:        health.LivenessHandler(),
+		Readiness:       health.ReadinessHandler(checker),
+		Capabilities:    capabilities,
 		Provider: inboundhttp.ProviderSummary{
 			Mode:          capabilities.Mode,
 			LLM:           capabilities.LLM.Provider,

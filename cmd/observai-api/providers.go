@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/factory"
@@ -9,6 +11,7 @@ import (
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/prompts"
 	coreports "github.com/guferreira1/observai-api/internal/core/ports"
 	"github.com/guferreira1/observai-api/internal/platform/config"
+	"github.com/guferreira1/observai-api/internal/platform/crypto"
 	"github.com/guferreira1/observai-api/internal/platform/observability"
 )
 
@@ -79,8 +82,8 @@ func newProviders(cfg config.Config, log *slog.Logger, observer observability.Pr
 }
 
 // providerInventoryFromConfig adapts the current configuration into a
-// snapshot for the Setup use case. W4 swaps this for a DB-backed
-// implementation without changing the use case contract.
+// snapshot for the Setup use case. Kept for the local/dev fallback when no
+// DB-backed repository is wired.
 func providerInventoryFromConfig(cfg config.Config) coreports.ProviderInventory {
 	return coreports.ProviderInventoryFunc(func() coreports.ProviderInventorySnapshot {
 		return coreports.ProviderInventorySnapshot{
@@ -88,6 +91,52 @@ func providerInventoryFromConfig(cfg config.Config) coreports.ProviderInventory 
 			LLMProviders:           len(cfg.LLM.Providers),
 		}
 	})
+}
+
+// providerInventoryFromStores prefers the DB-backed provider/LLM
+// configurations when available, falling back to the YAML/env-derived
+// counts otherwise. The snapshot is computed at call time so the setup
+// status endpoint reflects the live state without restart.
+func providerInventoryFromStores(store analysisStore, cfg config.Config) coreports.ProviderInventory {
+	if store.providerConfigs == nil || store.llmConfigs == nil {
+		return providerInventoryFromConfig(cfg)
+	}
+	return coreports.ProviderInventoryFunc(func() coreports.ProviderInventorySnapshot {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*1e9)
+		defer cancel()
+		providerCount, err := store.providerConfigs.Count(ctx)
+		if err != nil {
+			providerCount = int64(len(cfg.Observability.Providers))
+		}
+		llmCount, err := store.llmConfigs.Count(ctx)
+		if err != nil {
+			llmCount = int64(len(cfg.LLM.Providers))
+		}
+		return coreports.ProviderInventorySnapshot{
+			ObservabilityProviders: int(providerCount),
+			LLMProviders:           int(llmCount),
+		}
+	})
+}
+
+// buildEncryptionCipher returns the cipher used by the provider/LLM
+// configuration use cases. In local mode without a configured key the
+// function generates a volatile key for the session and warns; production
+// startup already enforces the presence of the key via config.Validate.
+func buildEncryptionCipher(cfg config.Config, log *slog.Logger) (coreports.Cipher, error) {
+	key, err := cfg.LoadEncryptionKey()
+	if err != nil {
+		if !errors.Is(err, config.ErrEncryptionKeyMissing) {
+			return nil, err
+		}
+		volatile, err := crypto.GenerateKey()
+		if err != nil {
+			return nil, err
+		}
+		log.Warn("encryption key missing; generated volatile in-memory key for local session")
+		key = volatile
+	}
+	return crypto.NewAESGCMCipher(key)
 }
 
 func toObservabilityProviders(capabilities []factory.ProviderCapability) []observabilityProvider {

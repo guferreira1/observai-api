@@ -84,6 +84,34 @@ type AuditLog struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type LlmConfiguration struct {
+	ID               string             `json:"id"`
+	Type             string             `json:"type"`
+	Name             string             `json:"name"`
+	BaseUrl          string             `json:"base_url"`
+	Model            string             `json:"model"`
+	TimeoutMs        int32              `json:"timeout_ms"`
+	ApiKeyCiphertext pgtype.Text        `json:"api_key_ciphertext"`
+	Options          []byte             `json:"options"`
+	IsActive         bool               `json:"is_active"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ProviderConfiguration struct {
+	ID                    string             `json:"id"`
+	Type                  string             `json:"type"`
+	Name                  string             `json:"name"`
+	Url                   string             `json:"url"`
+	TimeoutMs             int32              `json:"timeout_ms"`
+	Signals               []string           `json:"signals"`
+	Options               []byte             `json:"options"`
+	CredentialsCiphertext pgtype.Text        `json:"credentials_ciphertext"`
+	IsActive              bool               `json:"is_active"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
 type RefreshToken struct {
 	ID         string             `json:"id"`
 	UserID     string             `json:"user_id"`
