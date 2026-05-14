@@ -1,12 +1,7 @@
 name: API CI
 
 on:
-  pull_request:
-    branches:
-      - main
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,6 +10,20 @@ jobs:
   validate:
     name: Validate Go project
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: observai
+          POSTGRES_PASSWORD: observai
+          POSTGRES_DB: observai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U observai -d observai"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout repository
@@ -41,6 +50,12 @@ jobs:
         if: steps.detect.outputs.go_project == 'true'
         run: go mod download
 
+      - name: Install validation tools
+        if: steps.detect.outputs.go_project == 'true'
+        run: |
+          go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+          go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.0
+
       - name: Format check
         if: steps.detect.outputs.go_project == 'true'
         run: |
@@ -50,9 +65,35 @@ jobs:
         if: steps.detect.outputs.go_project == 'true'
         run: go vet ./...
 
+      - name: golangci-lint
+        if: steps.detect.outputs.go_project == 'true'
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+      - name: sqlc compile
+        if: steps.detect.outputs.go_project == 'true'
+        run: sqlc compile
+
+      - name: sqlc generated diff
+        if: steps.detect.outputs.go_project == 'true'
+        run: sqlc diff
+
+      - name: Migration check
+        if: steps.detect.outputs.go_project == 'true'
+        env:
+          OBSERVAI_TEST_DATABASE_DSN: postgres://observai:observai@localhost:5432/observai?sslmode=disable
+        run: |
+          migrate -path migrations -database "$OBSERVAI_TEST_DATABASE_DSN" up
+          migrate -path migrations -database "$OBSERVAI_TEST_DATABASE_DSN" down -all
+
       - name: Test
         if: steps.detect.outputs.go_project == 'true'
-        run: go test ./... -race -coverprofile=coverage.out
+        env:
+          OBSERVAI_TEST_DATABASE_DSN: postgres://observai:observai@localhost:5432/observai?sslmode=disable
+        run: |
+          migrate -path migrations -database "$OBSERVAI_TEST_DATABASE_DSN" up
+          go test ./... -race -coverprofile=coverage.out
 
       - name: Build
         if: steps.detect.outputs.go_project == 'true'

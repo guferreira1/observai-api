@@ -11,6 +11,10 @@
 # Test binary, built with `go test -c`
 *.test
 
+# Live reload artifacts
+tmp/
+air-build-errors.log
+
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
@@ -28,5 +32,14 @@ go.work.sum
 .env
 
 # Editor/IDE
- .idea/
- .vscode/
+.idea/
+.vscode/
+
+# Local AI assistant instructions
+AGENTS.md
+CLAUDE.md
+.codex/
+.claude/
+
+# Local development infrastructure
+docker/

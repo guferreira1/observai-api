@@ -206,29 +206,79 @@ ObservAI API is observability-provider agnostic.
 
 ---
 
-## Environment variables
+## Configuration
+
+ObservAI can read configuration from a YAML file and still allow environment variables to override individual values.
+
+```bash
+OBSERVAI_CONFIG_FILE=config/config.example.yaml go run ./cmd/observai-api
+```
+
+Example YAML:
+
+```yaml
+port: "8080"
+env: local
+database_dsn: postgres://observai:observai@localhost:5432/observai?sslmode=disable
+redis_url: redis://localhost:6379/0
+analysis_context_cache_ttl: 6h
+```
+
+Environment variables remain supported:
 
 ```env
+OBSERVAI_CONFIG_FILE=config/config.example.yaml
 OBSERVAI_API_PORT=8080
 OBSERVAI_ENV=local
+OBSERVAI_DATABASE_DSN=postgres://observai:observai@localhost:5432/observai?sslmode=disable
+OBSERVAI_REDIS_URL=redis://localhost:6379/0
+OBSERVAI_ANALYSIS_CONTEXT_CACHE_TTL=6h
+OBSERVAI_QUEUE_CONCURRENCY=5
+OBSERVAI_QUEUE_DEQUEUE_TIMEOUT=5s
+OBSERVAI_CHAT_LOCK_TTL=60s
+OBSERVAI_CHAT_LOCK_WAIT=30s
+```
 
-POSTGRES_USER=observai
-POSTGRES_PASSWORD=observai
-POSTGRES_DB=observai
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
+## Async analysis and concurrent chat
 
-REDIS_URL=redis://redis:6379
+Analyses run asynchronously to keep request latency low and the LLM provider under
+backpressure even when many users hit the API at the same time.
 
-OBSERVAI_ENCRYPTION_KEY=change-me
-OBSERVAI_JWT_SECRET=change-me
+```txt
+POST /v1/analyses
+  -> 202 Accepted, body: { jobId, status, statusUrl }, header: Location: /v1/jobs/{jobId}
 
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
-GEMINI_API_KEY=
-OPENROUTER_API_KEY=
+GET /v1/jobs/{jobId}
+  -> 200 with { status: pending|running|completed|failed, analysisId? }
 
-OLLAMA_BASE_URL=http://ollama:11434
+GET /v1/analyses/{analysisId}
+  -> 200 with the final analysis once the job is completed
+```
+
+The same identifier flows through the lifecycle: `jobId` and `analysisId` are
+equal once the worker finishes. `OBSERVAI_QUEUE_CONCURRENCY` caps how many
+analyses execute in parallel on a single instance.
+
+Chat (`POST /v1/analyses/{id}/chat`) stays synchronous from the client's point
+of view but is serialized per analysis through a Redis lock (in-process mutex
+when Redis is not configured). Concurrent questions about the same analysis
+hit the LLM in FIFO order; questions about different analyses run in parallel.
+See `docs/architecture/concurrency.md` for the full model.
+
+## Run locally with live reload
+
+Air is registered as a Go tool and uses `.air.toml` from the repository root.
+
+```bash
+go tool air
+```
+
+By default, the API runs in local mode with in-memory fallbacks when external
+dependencies are not configured. To run Air with the example YAML configuration,
+start the local dependencies and pass `OBSERVAI_CONFIG_FILE`:
+
+```bash
+OBSERVAI_CONFIG_FILE=config/config.example.yaml go tool air
 ```
 
 ---
@@ -250,6 +300,18 @@ Health check:
 ```txt
 http://localhost:8080/health
 ```
+
+---
+
+## Database migrations
+
+Migrations use golang-migrate and live in `migrations/`.
+
+```bash
+migrate -path migrations -database "$OBSERVAI_DATABASE_DSN" up
+```
+
+SQL queries prepared for sqlc live under `internal/adapters/outbound/postgres/query`.
 
 ---
 

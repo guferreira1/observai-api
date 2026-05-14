@@ -1,0 +1,23 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema:
+      - migrations/000001_create_analyses_and_chat_messages.up.sql
+      - migrations/000002_add_analyses_constraints_and_index.up.sql
+      - migrations/000003_create_analysis_jobs.up.sql
+      - migrations/000004_add_analysis_jobs_phase_and_canceled.up.sql
+      - migrations/000005_add_analyses_filter_indexes.up.sql
+      - migrations/000006_create_chat_feedback.up.sql
+      - migrations/000007_add_analyses_trace_id.up.sql
+      - migrations/000008_create_api_keys.up.sql
+      - migrations/000009_create_audit_log.up.sql
+      - migrations/000010_create_webhook_subscriptions.up.sql
+    queries:
+      - internal/adapters/outbound/postgres/query
+    gen:
+      go:
+        package: sqlc
+        out: internal/adapters/outbound/postgres/sqlc
+        sql_package: pgx/v5
+        emit_json_tags: true
+        emit_empty_slices: true

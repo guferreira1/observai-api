@@ -1,0 +1,1305 @@
+openapi: 3.1.0
+info:
+  title: ObservAI API
+  version: 0.1.0
+  description: |
+    Provider-agnostic observability analysis gateway.
+
+    All successful responses are wrapped in `WrapperDtoResponde` with a stable
+    `data` and `metadata` envelope. Provider-specific fields never leak into
+    the public contract — adapters normalize them into the schemas documented
+    below.
+
+    The interaction chat answers only questions related to an active analysis.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+tags:
+  - name: analysis
+    description: Create, list and retrieve analyses.
+  - name: chat
+    description: Scoped conversation about an existing analysis.
+  - name: operational
+    description: Health, readiness and Prometheus metrics.
+paths:
+  /health:
+    get:
+      tags: [operational]
+      summary: Application health probe.
+      responses:
+        "200":
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_HealthResponse"
+  /healthz:
+    get:
+      tags: [operational]
+      summary: Kubernetes liveness probe.
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LivenessResponse"
+  /readyz:
+    get:
+      tags: [operational]
+      summary: Kubernetes readiness probe.
+      description: |
+        Returns the aggregated probe result with one entry per critical
+        dependency (database, queue, providers). The same payload is returned
+        with status `503` when any probe fails so clients can render a
+        degraded-but-online state without a second request.
+      responses:
+        "200":
+          description: All dependencies are ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: One or more dependencies are not ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+  /metrics:
+    get:
+      tags: [operational]
+      summary: Prometheus scrape endpoint.
+      responses:
+        "200":
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /v1/openapi.yaml:
+    get:
+      tags: [operational]
+      summary: This OpenAPI specification.
+      responses:
+        "200":
+          description: OpenAPI 3.1 document.
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /v1/capabilities:
+    get:
+      tags: [operational]
+      summary: Non-sensitive runtime capabilities.
+      description: |
+        Returns the active deployment mode, configured LLM, active observability
+        providers (with the signals each one supports) and request-shape limits.
+        Frontends use this payload to render the runtime panel, gate features
+        that depend on optional providers and validate request sizes/timeouts.
+      responses:
+        "200":
+          description: Runtime capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_CapabilitiesResponse"
+  /v1/analyses:
+    post:
+      tags: [analysis]
+      summary: Submit a new asynchronous analysis job.
+      description: |
+        Validates the request, creates a `pending` job and returns immediately
+        with `202 Accepted`. The client must poll `GET /v1/jobs/{jobID}` until
+        the status becomes `completed` or `failed`. The same identifier is
+        reused as the final analysis identifier once the worker finishes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalysisRequestDto"
+            examples:
+              latency-spike:
+                summary: Investigate a latency spike.
+                value:
+                  goal: Identify the cause of the checkout latency spike.
+                  timeWindow:
+                    start: "2026-05-13T08:00:00Z"
+                    end: "2026-05-13T08:30:00Z"
+                  affectedServices: ["checkout-api", "payments-gateway"]
+                  signals: ["metrics", "logs", "traces"]
+                  context: Deploy completed at 07:55 UTC.
+      responses:
+        "202":
+          description: Analysis job accepted; poll the Location URL for completion.
+          headers:
+            Location:
+              schema: { type: string }
+              description: URL where the job status can be polled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_AnalysisJobAcceptedDto"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "499":
+          $ref: "#/components/responses/ClientClosedRequest"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      tags: [analysis]
+      summary: List analyses with pagination and filters.
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: severity
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - in: query
+          name: service
+          schema: { type: string }
+        - in: query
+          name: signal
+          description: Match analyses whose evidence includes the given signal.
+          schema:
+            type: string
+            enum: [logs, metrics, traces, apm]
+        - in: query
+          name: provider
+          description: Match analyses whose evidence references the given provider name.
+          schema: { type: string }
+        - in: query
+          name: from
+          description: Lower bound (inclusive) on `createdAt` in RFC3339 format.
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          description: Upper bound (inclusive) on `createdAt` in RFC3339 format.
+          schema: { type: string, format: date-time }
+        - in: query
+          name: q
+          description: Case-insensitive substring search applied to analysis summary and identifier.
+          schema: { type: string }
+        - in: query
+          name: sort
+          description: Column used to order results. Defaults to `createdAt`.
+          schema:
+            type: string
+            enum: [createdAt, severity, confidence]
+        - in: query
+          name: order
+          description: Ordering direction. Defaults to `desc`.
+          schema:
+            type: string
+            enum: [asc, desc]
+      responses:
+        "200":
+          description: Paginated list of analyses.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_AnalysisListResponseDto"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/jobs/{jobID}:
+    parameters:
+      - in: path
+        name: jobID
+        required: true
+        schema: { type: string }
+    get:
+      tags: [analysis]
+      summary: Retrieve the status of an asynchronous analysis job.
+      description: |
+        Always returns 200 while the job exists; clients inspect `data.status`
+        to differentiate pending, running, completed, failed or canceled jobs.
+        While running, `data.phase` and `data.progressPercent` describe the
+        current stage. When the job completes, `data.analysisId` points to the
+        final analysis URL.
+      responses:
+        "200":
+          description: Job state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_AnalysisJobStatusDto"
+        "404":
+          description: Job not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [analysis]
+      summary: Cancel a pending or running analysis job.
+      description: |
+        Marks the job as `canceled` and signals any in-process worker on this
+        instance to abort cooperatively. Completed, failed and already-canceled
+        jobs are returned unchanged so the call is idempotent. The response
+        always contains the current job state.
+      responses:
+        "202":
+          description: Cancellation accepted; the response payload reflects the latest job state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_AnalysisJobStatusDto"
+        "404":
+          description: Job not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/services:
+    get:
+      tags: [analysis]
+      summary: List unique services derived from stored analyses.
+      description: |
+        Used to drive the service autocomplete in the analysis workspace. The
+        list is ranked by frequency in the stored analyses and supports a
+        case-insensitive substring query.
+      parameters:
+        - in: query
+          name: q
+          description: Case-insensitive substring match applied to each service name.
+          schema: { type: string }
+        - in: query
+          name: limit
+          description: Maximum number of services to return. Defaults to 10.
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Matching services.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ServicesResponseDto"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/analyses/stats:
+    get:
+      tags: [analysis]
+      summary: Aggregated analysis statistics for dashboards.
+      description: |
+        Returns counts and distributions computed over stored analyses. Useful
+        for the operational dashboard: severity distribution, top affected
+        services, trend by day and confidence distribution. The current
+        implementation iterates over the latest 1000 matching analyses; large
+        datasets should rely on the SQL-pushdown follow-up.
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: service
+          schema: { type: string }
+        - in: query
+          name: severity
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+      responses:
+        "200":
+          description: Aggregated stats.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_AnalysisStatsResponseDto"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/analyses/{analysisID}:
+    parameters:
+      - $ref: "#/components/parameters/AnalysisID"
+    get:
+      tags: [analysis]
+      summary: Retrieve a previously created analysis.
+      responses:
+        "200":
+          description: Analysis found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_AnalysisResponseDto"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/analyses/{analysisID}/export:
+    parameters:
+      - $ref: "#/components/parameters/AnalysisID"
+    get:
+      tags: [analysis]
+      summary: Export a stored analysis as JSON or Markdown.
+      description: |
+        Returns the canonical analysis report rendered server-side so all
+        clients see the same content. JSON mirrors the API DTO; Markdown
+        renders impact, summary, root causes, evidence and actions for sharing
+        or attaching to incident notes. The response is delivered as a file
+        download via `Content-Disposition`.
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [json, md]
+            default: json
+      responses:
+        "200":
+          description: Rendered analysis.
+          content:
+            application/json:
+              schema: { type: object }
+            text/markdown:
+              schema: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/analyses/{analysisID}/traces:
+    parameters:
+      - $ref: "#/components/parameters/AnalysisID"
+    get:
+      tags: [analysis]
+      summary: Retrieve structured trace spans and derived insights.
+      description: |
+        Returns provider-agnostic spans (with parent/child links, timings and
+        attributes) plus derived insights — critical path, slowest spans and
+        aggregated service dependencies. The frontend uses this payload to
+        render a waterfall view and a service dependency map without inferring
+        structure from free-form text.
+
+        Instances that have no trace provider configured return `404` with
+        `code=not_found` so clients can disable the feature gracefully.
+      responses:
+        "200":
+          description: Structured trace insights for the analysis.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_TraceInsightsResponseDto"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/analyses/{analysisID}/chat/{messageID}/feedback:
+    parameters:
+      - $ref: "#/components/parameters/AnalysisID"
+      - in: path
+        name: messageID
+        required: true
+        schema: { type: string }
+        description: Identifier of the assistant message being rated.
+    post:
+      tags: [chat]
+      summary: Submit feedback on an assistant chat message.
+      description: |
+        Persists a thumbs-up/thumbs-down signal (plus optional reason) for a
+        previously delivered assistant message. Repeated submissions overwrite
+        the previous record so users can change their mind without producing
+        duplicates.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatFeedbackRequestDto"
+            examples:
+              positive:
+                summary: Useful answer.
+                value: { useful: true }
+              negative:
+                summary: Unhelpful answer.
+                value: { useful: false, reason: "missed the trace anomaly" }
+      responses:
+        "201":
+          description: Feedback persisted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ChatFeedbackResponseDto"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /v1/analyses/{analysisID}/chat:
+    parameters:
+      - $ref: "#/components/parameters/AnalysisID"
+    post:
+      tags: [chat]
+      summary: Ask a scoped question about an analysis.
+      description: |
+        Two response shapes are supported on this endpoint:
+
+        - Default (`Accept: application/json`): single JSON document with the
+          full scoped answer.
+        - Streaming (`Accept: text/event-stream`): Server-Sent Events stream
+          carrying ordered `token`, `evidence_cited`, `done` and optional
+          `error` events. Frontends should reconnect or fall back to the
+          non-streaming response if the connection drops.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequestDto"
+            examples:
+              in-scope:
+                summary: Valid question about the active analysis.
+                value:
+                  question: Which evidence supports the database saturation hypothesis?
+      responses:
+        "200":
+          description: Scoped answer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ChatResponseDto"
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Ordered SSE events. Each event has an `event:` line carrying
+                  the type (`token`, `evidence_cited`, `done`, `error`) and a
+                  JSON-encoded `data:` line whose shape depends on the type.
+        "400":
+          description: Invalid question or out-of-scope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
+              examples:
+                out-of-scope:
+                  summary: Question is unrelated to the analysis.
+                  value:
+                    data:
+                      code: question_out_of_scope
+                      message: I can only answer questions about the active ObservAI analysis. Ask about the evidence, hypotheses, affected services or recommended investigation steps.
+                    metadata:
+                      requestId: 0d4f9c43-1f8e-4f02-9b76-37c12f12d8b4
+                      processingTimeMs: 3
+                      provider: { mode: local }
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      tags: [chat]
+      summary: Retrieve the persisted chat history for an analysis.
+      parameters:
+        - in: query
+          name: limit
+          description: Maximum number of messages to return. Defaults to 50, capped at 200.
+          schema: { type: integer, minimum: 0 }
+        - in: query
+          name: before
+          description: Cursor in RFC3339 format. Only messages strictly older than this timestamp are returned.
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Chat history (oldest first).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ChatHistoryResponseDto"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+components:
+  parameters:
+    AnalysisID:
+      in: path
+      name: analysisID
+      required: true
+      schema:
+        type: string
+      description: Unique analysis identifier returned by `POST /v1/analyses`.
+  responses:
+    BadRequest:
+      description: The request payload, body or filter is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
+          examples:
+            invalid-json:
+              value:
+                data:
+                  code: invalid_json
+                  message: request body contains unknown field
+                  details:
+                    - field: severity
+                      rule: unknown_field
+                metadata:
+                  requestId: a1
+                  processingTimeMs: 1
+                  provider: { mode: local }
+            invalid-request:
+              value:
+                data:
+                  code: invalid_request
+                  message: request validation failed
+                  details:
+                    - field: goal
+                      rule: required
+                metadata:
+                  requestId: a2
+                  processingTimeMs: 1
+                  provider: { mode: local }
+            invalid-analysis-filter:
+              value:
+                data:
+                  code: invalid_analysis_filter
+                  message: "severity \"unknown\" is not supported"
+                metadata:
+                  requestId: a3
+                  processingTimeMs: 1
+                  provider: { mode: local }
+    NotFound:
+      description: Analysis or analysis context not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
+          examples:
+            analysis-not-found:
+              value:
+                data: { code: analysis_not_found, message: analysis not found }
+                metadata:
+                  requestId: a4
+                  processingTimeMs: 0
+                  provider: { mode: local }
+    PayloadTooLarge:
+      description: Request body exceeds the configured size limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
+          examples:
+            too-large:
+              value:
+                data:
+                  code: request_body_too_large
+                  message: request body exceeds the configured size limit
+                metadata:
+                  requestId: a5
+                  processingTimeMs: 0
+                  provider: { mode: local }
+    ClientClosedRequest:
+      description: Client closed the connection before the response was sent.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
+    GatewayTimeout:
+      description: Server-side processing budget exceeded.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
+          examples:
+            timeout:
+              value:
+                data:
+                  code: request_timeout
+                  message: request exceeded the server-side processing budget
+                metadata:
+                  requestId: a6
+                  processingTimeMs: 5000
+                  provider: { mode: local }
+    InternalError:
+      description: Unexpected internal error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
+          examples:
+            internal:
+              value:
+                data: { code: internal_error, message: internal server error }
+                metadata:
+                  requestId: a7
+                  processingTimeMs: 1
+                  provider: { mode: local }
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+    LivenessResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+    ReadinessResponse:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, failed]
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReadinessCheck"
+    ReadinessCheck:
+      type: object
+      required: [name, status, durationMs]
+      properties:
+        name:
+          type: string
+          description: Dependency identifier (e.g., `postgres`, `redis`, `prometheus`).
+        status:
+          type: string
+          enum: [ok, failed]
+        error:
+          type: string
+          description: Present only when status is `failed`.
+        durationMs:
+          type: integer
+          format: int64
+    ResponseMetadata:
+      type: object
+      required: [requestId, processingTimeMs, provider]
+      properties:
+        requestId:
+          type: string
+          description: Correlation identifier echoed back in the `X-Request-Id` header.
+        processingTimeMs:
+          type: integer
+          format: int64
+          description: Server-side processing time in milliseconds.
+        provider:
+          $ref: "#/components/schemas/ProviderSummary"
+        warnings:
+          type: array
+          items: { type: string }
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+    ProviderSummary:
+      type: object
+      required: [mode]
+      properties:
+        observability:
+          type: array
+          items: { type: string }
+        llm:
+          type: string
+        mode:
+          type: string
+          description: Deployment mode (`local`, `dev`, `prod`).
+    Pagination:
+      type: object
+      required: [limit, offset, total]
+      properties:
+        limit: { type: integer }
+        offset: { type: integer }
+        total:
+          type: integer
+          description: Total number of records that match the current filter, ignoring pagination.
+        next:
+          type: string
+          description: Path + query for the next page or empty when no more pages remain.
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: |
+            Machine-readable error code. Stable values:
+            `invalid_analysis_request`, `invalid_analysis_filter`,
+            `invalid_chat_question`, `question_out_of_scope`, `invalid_json`,
+            `invalid_request`, `analysis_not_found`,
+            `analysis_context_not_found`, `request_body_too_large`,
+            `request_canceled`, `request_timeout`, `internal_error`.
+          enum:
+            - invalid_analysis_request
+            - invalid_analysis_filter
+            - invalid_chat_question
+            - question_out_of_scope
+            - invalid_json
+            - invalid_request
+            - analysis_not_found
+            - analysis_context_not_found
+            - analysis_job_not_found
+            - chat_message_not_found
+            - invalid_export_format
+            - request_body_too_large
+            - request_canceled
+            - request_timeout
+            - not_found
+            - internal_error
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            $ref: "#/components/schemas/ErrorFieldDetail"
+    ErrorFieldDetail:
+      type: object
+      required: [field, rule]
+      properties:
+        field: { type: string }
+        rule: { type: string }
+        message: { type: string }
+    AnalysisRequestDto:
+      type: object
+      required: [goal, affectedServices]
+      properties:
+        goal:
+          type: string
+          description: Free-form description of the analysis objective.
+        timeWindow:
+          $ref: "#/components/schemas/TimeDto"
+        affectedServices:
+          type: array
+          items: { type: string }
+        signals:
+          type: array
+          items:
+            type: string
+            enum: [logs, metrics, traces, apm]
+        context:
+          type: string
+    TimeDto:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+    AnalysisResponseDto:
+      type: object
+      required:
+        - id
+        - summary
+        - severity
+        - confidence
+        - affectedServices
+        - evidence
+        - detectedAnomalies
+        - possibleRootCauses
+        - recommendedActions
+        - codeLevelInsights
+        - missingEvidence
+        - createdAt
+      properties:
+        id: { type: string }
+        summary: { type: string }
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        confidence:
+          type: string
+          enum: [low, medium, high]
+        affectedServices:
+          type: array
+          items: { type: string }
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceDto"
+        detectedAnomalies:
+          type: array
+          items: { type: string }
+        possibleRootCauses:
+          type: array
+          items:
+            $ref: "#/components/schemas/RootCauseHypothesisDto"
+        recommendedActions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendationDto"
+        codeLevelInsights:
+          type: array
+          items: { type: string }
+        missingEvidence:
+          type: array
+          items: { type: string }
+        createdAt:
+          type: string
+          format: date-time
+    AnalysisListResponseDto:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalysisResponseDto"
+    EvidenceDto:
+      type: object
+      required: [id, signal, service, source, name, summary, observed, score]
+      properties:
+        id:
+          type: string
+          description: Stable identifier of this evidence within the parent analysis. Used to cite evidence in chat answers and to link root-cause hypotheses to supporting observations.
+        signal:
+          type: string
+          enum: [logs, metrics, traces, apm]
+        service: { type: string }
+        source: { type: string }
+        name: { type: string }
+        summary: { type: string }
+        observed:
+          type: string
+          format: date-time
+        score:
+          type: number
+          format: double
+        unit: { type: string }
+        reference: { type: string }
+        provider: { type: string }
+        query: { type: string }
+        attributes:
+          type: object
+          additionalProperties: { type: string }
+    RootCauseHypothesisDto:
+      type: object
+      required: [cause, evidence, confidence]
+      properties:
+        cause: { type: string }
+        evidence:
+          type: array
+          description: Evidence identifiers (`EvidenceDto.id`) that support this hypothesis.
+          items: { type: string }
+        confidence:
+          type: string
+          enum: [low, medium, high]
+    RecommendationDto:
+      type: object
+      required: [action, rationale, priority]
+      properties:
+        action: { type: string }
+        rationale: { type: string }
+        priority:
+          type: integer
+          description: Lower numbers indicate higher priority (1 is most important).
+    ChatRequestDto:
+      type: object
+      required: [question]
+      properties:
+        question: { type: string }
+    ChatResponseDto:
+      type: object
+      required: [analysisId, answer, evidence]
+      properties:
+        analysisId: { type: string }
+        answer: { type: string }
+        evidence:
+          type: array
+          description: Evidence identifiers (`EvidenceDto.id`) referenced by this answer.
+          items: { type: string }
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatCitationDto"
+    ChatCitationDto:
+      type: object
+      required: [evidenceId]
+      properties:
+        evidenceId:
+          type: string
+          description: Stable evidence identifier within the parent analysis.
+        snippet:
+          type: string
+          description: Optional human-readable preview rendered alongside the citation.
+    ChatHistoryResponseDto:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessageDto"
+    ChatFeedbackRequestDto:
+      type: object
+      required: [useful]
+      properties:
+        useful:
+          type: boolean
+        reason:
+          type: string
+          description: Optional free-form note explaining the rating.
+    ChatFeedbackResponseDto:
+      type: object
+      required: [analysisId, messageId, useful, createdAt]
+      properties:
+        analysisId: { type: string }
+        messageId: { type: string }
+        useful: { type: boolean }
+        reason: { type: string }
+        createdAt:
+          type: string
+          format: date-time
+    WrapperDtoResponde_ChatFeedbackResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/ChatFeedbackResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    ChatMessageDto:
+      type: object
+      required: [id, analysisId, role, content, createdAt]
+      properties:
+        id: { type: string }
+        analysisId: { type: string }
+        role:
+          type: string
+          enum: [user, assistant]
+        content: { type: string }
+        evidence:
+          type: array
+          items: { type: string }
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatCitationDto"
+        createdAt:
+          type: string
+          format: date-time
+    WrapperDtoResponde_HealthResponse:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/HealthResponse"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    CapabilitiesResponse:
+      type: object
+      required: [mode, llm, observability, limits]
+      properties:
+        mode:
+          type: string
+          description: Deployment mode (`local`, `dev`, `prod`).
+        version:
+          type: string
+          description: Build version embedded into the binary at compile time.
+        llm:
+          $ref: "#/components/schemas/CapabilityLLM"
+        observability:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapabilityProvider"
+        limits:
+          $ref: "#/components/schemas/CapabilityLimits"
+    CapabilityLLM:
+      type: object
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          description: Active LLM adapter name (`fake`, `ollama`, ...). Never a token or URL.
+        model:
+          type: string
+          description: Optional model identifier exposed by the LLM adapter.
+    CapabilityProvider:
+      type: object
+      required: [provider, signals]
+      properties:
+        provider:
+          type: string
+          description: Active observability adapter name (`fake`, `prometheus`, ...).
+        signals:
+          type: array
+          items:
+            type: string
+            enum: [logs, metrics, traces, apm]
+    CapabilityLimits:
+      type: object
+      required: [httpRequestTimeoutMs, httpMaxBodyBytes]
+      properties:
+        httpRequestTimeoutMs:
+          type: integer
+          format: int64
+        httpMaxBodyBytes:
+          type: integer
+          format: int64
+        rateLimitRps:
+          type: number
+          format: double
+        rateLimitBurst:
+          type: integer
+    WrapperDtoResponde_CapabilitiesResponse:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/CapabilitiesResponse"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_AnalysisResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/AnalysisResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_AnalysisListResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/AnalysisListResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    ServicesResponseDto:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { type: string }
+    WrapperDtoResponde_ServicesResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/ServicesResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    AnalysisStatsResponseDto:
+      type: object
+      required: [total, bySeverity, byConfidence, topAffectedServices, trendBuckets]
+      properties:
+        total: { type: integer }
+        bySeverity:
+          type: object
+          additionalProperties: { type: integer }
+        byConfidence:
+          type: object
+          additionalProperties: { type: integer }
+        topAffectedServices:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalysisStatsServiceDto"
+        trendBuckets:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalysisStatsTrendDto"
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+    AnalysisStatsServiceDto:
+      type: object
+      required: [service, count]
+      properties:
+        service: { type: string }
+        count: { type: integer }
+    AnalysisStatsTrendDto:
+      type: object
+      required: [bucketStart, count]
+      properties:
+        bucketStart:
+          type: string
+          format: date-time
+        count: { type: integer }
+    WrapperDtoResponde_AnalysisStatsResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/AnalysisStatsResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    TraceInsightsResponseDto:
+      type: object
+      required: [spans, criticalPathSpanIds, slowestSpanIds, dependencyEdges]
+      properties:
+        spans:
+          type: array
+          items:
+            $ref: "#/components/schemas/SpanDto"
+        criticalPathSpanIds:
+          type: array
+          items: { type: string }
+          description: Span IDs that form the longest parent/child chain by duration.
+        slowestSpanIds:
+          type: array
+          items: { type: string }
+          description: Span IDs of the slowest spans ordered by duration descending.
+        dependencyEdges:
+          type: array
+          items:
+            $ref: "#/components/schemas/TraceDependencyEdgeDto"
+    SpanDto:
+      type: object
+      required: [traceId, spanId, service, operation, startTime, durationMs, selfTimeMs, status]
+      properties:
+        traceId: { type: string }
+        spanId: { type: string }
+        parentSpanId:
+          type: string
+          description: Identifier of the parent span. Omitted for the root span of a trace.
+        service: { type: string }
+        operation: { type: string }
+        startTime:
+          type: string
+          format: date-time
+        durationMs:
+          type: number
+          format: double
+        selfTimeMs:
+          type: number
+          format: double
+        status:
+          type: string
+          enum: [ok, error, unset]
+        attributes:
+          type: object
+          additionalProperties: { type: string }
+    TraceDependencyEdgeDto:
+      type: object
+      required: [from, to, callCount, p95Ms]
+      properties:
+        from: { type: string }
+        to: { type: string }
+        callCount: { type: integer }
+        p95Ms:
+          type: number
+          format: double
+    WrapperDtoResponde_TraceInsightsResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/TraceInsightsResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_ChatResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/ChatResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_ChatHistoryResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/ChatHistoryResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_ErrorResponse:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/ErrorResponse"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    AnalysisJobAcceptedDto:
+      type: object
+      required: [jobId, status, statusUrl]
+      properties:
+        jobId: { type: string }
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        statusUrl:
+          type: string
+          description: Relative URL the client should poll until the job finishes.
+    AnalysisJobStatusDto:
+      type: object
+      required: [jobId, status, phase, progressPercent, attempt, createdAt]
+      properties:
+        jobId: { type: string }
+        status:
+          type: string
+          enum: [pending, running, completed, failed, canceled]
+        phase:
+          type: string
+          description: Fine-grained progress hint. Meaningful while the job is running. Defaults to `queued` for pending jobs and is set to `done` after completion.
+          enum: [queued, collecting_signals, normalizing, calling_llm, persisting, done]
+        progressPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Coarse progress percentage in [0,100]. Frontends use this for a progress bar; it is not a precise time estimate.
+        analysisId:
+          type: string
+          description: Populated once the job completes; same value as `jobId`.
+        analysisUrl:
+          type: string
+          description: Relative URL for the final analysis once the job completes.
+        errorMessage:
+          type: string
+          description: Populated only when status is `failed`.
+        attempt: { type: integer }
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        phaseStartedAt:
+          type: string
+          format: date-time
+          description: When the current phase began. Refreshed at each phase transition.
+        finishedAt:
+          type: string
+          format: date-time
+    WrapperDtoResponde_AnalysisJobAcceptedDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/AnalysisJobAcceptedDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_AnalysisJobStatusDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/AnalysisJobStatusDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
