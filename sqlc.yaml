@@ -13,6 +13,7 @@ sql:
       - migrations/000009_create_audit_log.up.sql
       - migrations/000010_create_webhook_subscriptions.up.sql
       - migrations/000011_create_users.up.sql
+      - migrations/000012_extend_api_keys.up.sql
     queries:
       - internal/adapters/outbound/postgres/query
     gen:

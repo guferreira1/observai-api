@@ -192,7 +192,7 @@ func TestCSRFMiddlewareSkipsAPIKeyAuth(t *testing.T) {
 		writer.WriteHeader(stdhttp.StatusOK)
 	}))
 	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", nil)
-	request = request.WithContext(withPrincipal(request.Context(), AuthPrincipal{Source: AuthSourceAPIKey, Scope: domain.APIKeyScopeAdmin}))
+	request = request.WithContext(withPrincipal(request.Context(), AuthPrincipal{Source: AuthSourceAPIKey, Scopes: domain.AllAPIKeyScopes()}))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != stdhttp.StatusOK {

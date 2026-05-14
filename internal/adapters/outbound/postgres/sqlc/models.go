@@ -59,13 +59,16 @@ type AnalysisJob struct {
 }
 
 type ApiKey struct {
-	ID         string             `json:"id"`
-	Name       string             `json:"name"`
-	KeyHash    string             `json:"key_hash"`
-	Scope      string             `json:"scope"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
-	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	KeyHash     string             `json:"key_hash"`
+	Scope       string             `json:"scope"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+	Description pgtype.Text        `json:"description"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	Scopes      []string           `json:"scopes"`
 }
 
 type AuditLog struct {

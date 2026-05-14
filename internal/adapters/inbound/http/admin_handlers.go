@@ -2,6 +2,7 @@ package http
 
 import (
 	"errors"
+	"fmt"
 	stdhttp "net/http"
 	"strconv"
 	"strings"
@@ -9,33 +10,42 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/guferreira1/observai-api/internal/core/domain"
+	"github.com/guferreira1/observai-api/internal/core/policy"
+	"github.com/guferreira1/observai-api/internal/core/usecase"
 )
 
 // IssueAPIKeyRequestDto carries the payload accepted by POST /v1/admin/keys.
 type IssueAPIKeyRequestDto struct {
-	Name  string `json:"name"`
-	Scope string `json:"scope"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Scopes      []string `json:"scopes"`
+	ExpiresAt   *string  `json:"expiresAt,omitempty"`
 }
 
 // IssuedAPIKeyResponseDto is the response payload for POST /v1/admin/keys.
 //
 // Secret is shown once at issue time and must not be retrievable later.
 type IssuedAPIKeyResponseDto struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Scope     string `json:"scope"`
-	Secret    string `json:"secret"`
-	CreatedAt string `json:"createdAt"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Scopes      []string `json:"scopes"`
+	Secret      string   `json:"secret"`
+	CreatedAt   string   `json:"createdAt"`
+	ExpiresAt   *string  `json:"expiresAt,omitempty"`
 }
 
 // APIKeyDto describes a persisted API key without the secret.
 type APIKeyDto struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	Scope      string  `json:"scope"`
-	CreatedAt  string  `json:"createdAt"`
-	LastUsedAt *string `json:"lastUsedAt,omitempty"`
-	RevokedAt  *string `json:"revokedAt,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Scopes      []string `json:"scopes"`
+	Masked      string   `json:"masked"`
+	CreatedAt   string   `json:"createdAt"`
+	ExpiresAt   *string  `json:"expiresAt,omitempty"`
+	LastUsedAt  *string  `json:"lastUsedAt,omitempty"`
+	RevokedAt   *string  `json:"revokedAt,omitempty"`
 }
 
 // CreateWebhookRequestDto carries POST /v1/admin/webhooks input.
@@ -86,23 +96,26 @@ func (router *Router) handleIssueAPIKey(writer stdhttp.ResponseWriter, request *
 		return
 	}
 
-	scope := domain.APIKeyScope(strings.TrimSpace(dto.Scope))
-	if scope == "" {
-		scope = domain.APIKeyScopeDefault
+	issueRequest, err := toIssueAPIKeyRequest(dto)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
 	}
 
-	issued, err := router.apiKeys.Issue(request.Context(), dto.Name, scope)
+	issued, err := router.apiKeys.Issue(request.Context(), issueRequest)
 	if err != nil {
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
 
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, IssuedAPIKeyResponseDto{
-		ID:        issued.APIKey.ID,
-		Name:      issued.APIKey.Name,
-		Scope:     string(issued.APIKey.Scope),
-		Secret:    issued.Secret,
-		CreatedAt: issued.APIKey.CreatedAt.Format(time.RFC3339),
+		ID:          issued.APIKey.ID,
+		Name:        issued.APIKey.Name,
+		Description: issued.APIKey.Description,
+		Scopes:      scopesToStrings(issued.APIKey.Scopes),
+		Secret:      issued.Secret,
+		CreatedAt:   issued.APIKey.CreatedAt.Format(time.RFC3339),
+		ExpiresAt:   formatOptionalTime(issued.APIKey.ExpiresAt),
 	})
 }
 
@@ -119,14 +132,7 @@ func (router *Router) handleListAPIKeys(writer stdhttp.ResponseWriter, request *
 
 	items := make([]APIKeyDto, 0, len(keys))
 	for _, key := range keys {
-		items = append(items, APIKeyDto{
-			ID:         key.ID,
-			Name:       key.Name,
-			Scope:      string(key.Scope),
-			CreatedAt:  key.CreatedAt.Format(time.RFC3339),
-			LastUsedAt: formatOptionalTime(key.LastUsedAt),
-			RevokedAt:  formatOptionalTime(key.RevokedAt),
-		})
+		items = append(items, toAPIKeyDto(key))
 	}
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, items)
 }
@@ -287,6 +293,53 @@ func (router *Router) handlePurgeAnalyses(writer stdhttp.ResponseWriter, request
 		return
 	}
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, PurgeAnalysesResponseDto{Deleted: deleted})
+}
+
+func toIssueAPIKeyRequest(dto IssueAPIKeyRequestDto) (usecase.IssueAPIKeyRequest, error) {
+	scopes := make([]domain.APIKeyScope, 0, len(dto.Scopes))
+	for _, raw := range dto.Scopes {
+		scopes = append(scopes, domain.APIKeyScope(raw))
+	}
+	request := usecase.IssueAPIKeyRequest{
+		Name:        strings.TrimSpace(dto.Name),
+		Description: strings.TrimSpace(dto.Description),
+		Scopes:      scopes,
+	}
+	if dto.ExpiresAt != nil {
+		cleaned := strings.TrimSpace(*dto.ExpiresAt)
+		if cleaned != "" {
+			expiresAt, err := time.Parse(time.RFC3339, cleaned)
+			if err != nil {
+				return usecase.IssueAPIKeyRequest{}, fmt.Errorf("%w: expiresAt must be RFC3339", domain.ErrInvalidAPIKey)
+			}
+			expiresAt = expiresAt.UTC()
+			request.ExpiresAt = &expiresAt
+		}
+	}
+	return request, nil
+}
+
+func toAPIKeyDto(key domain.APIKey) APIKeyDto {
+	dto := APIKeyDto{
+		ID:          key.ID,
+		Name:        key.Name,
+		Description: key.Description,
+		Scopes:      scopesToStrings(key.Scopes),
+		Masked:      policy.MaskSecret("oai_" + key.ID),
+		CreatedAt:   key.CreatedAt.Format(time.RFC3339),
+		ExpiresAt:   formatOptionalTime(key.ExpiresAt),
+		LastUsedAt:  formatOptionalTime(key.LastUsedAt),
+		RevokedAt:   formatOptionalTime(key.RevokedAt),
+	}
+	return dto
+}
+
+func scopesToStrings(scopes []domain.APIKeyScope) []string {
+	out := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		out = append(out, string(scope))
+	}
+	return out
 }
 
 func paginationFromQuery(request *stdhttp.Request) (int, int) {

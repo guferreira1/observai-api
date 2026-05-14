@@ -16,6 +16,14 @@ import (
 
 const apiKeySecretBytes = 32
 
+// IssueAPIKeyRequest carries the fields accepted by APIKey.Issue.
+type IssueAPIKeyRequest struct {
+	Name        string
+	Description string
+	Scopes      []domain.APIKeyScope
+	ExpiresAt   *time.Time
+}
+
 // APIKey is the use case responsible for issuing, listing and revoking
 // persistent API keys.
 type APIKey struct {
@@ -29,19 +37,24 @@ func NewAPIKey(repository ports.APIKeyRepository, ids ports.IDGenerator) *APIKey
 	return &APIKey{repository: repository, ids: ids, now: time.Now}
 }
 
-// Issue creates a new API key with the supplied name and scope. The
-// returned plaintext secret is the only opportunity the caller has to copy
-// the key; the repository only ever stores the hash.
-func (useCase *APIKey) Issue(ctx context.Context, name string, scope domain.APIKeyScope) (domain.IssuedAPIKey, error) {
-	cleanedName := strings.TrimSpace(name)
+// Issue creates a new API key with the supplied request. The returned
+// plaintext secret is the only opportunity the caller has to copy the key;
+// the repository only ever stores the hash.
+func (useCase *APIKey) Issue(ctx context.Context, request IssueAPIKeyRequest) (domain.IssuedAPIKey, error) {
+	cleanedName := strings.TrimSpace(request.Name)
 	if cleanedName == "" {
 		return domain.IssuedAPIKey{}, fmt.Errorf("%w: name is required", domain.ErrInvalidAPIKey)
 	}
-	if scope == "" {
-		scope = domain.APIKeyScopeDefault
+	scopes, err := domain.NormalizeAPIKeyScopes(request.Scopes)
+	if err != nil {
+		return domain.IssuedAPIKey{}, err
 	}
-	if !domain.IsValidAPIKeyScope(scope) {
-		return domain.IssuedAPIKey{}, fmt.Errorf("%w: scope %q is not supported", domain.ErrInvalidAPIKey, scope)
+	if len(scopes) == 0 {
+		return domain.IssuedAPIKey{}, fmt.Errorf("%w: at least one scope is required", domain.ErrInvalidAPIKey)
+	}
+	now := useCase.now().UTC()
+	if request.ExpiresAt != nil && !request.ExpiresAt.After(now) {
+		return domain.IssuedAPIKey{}, fmt.Errorf("%w: expiresAt must be in the future", domain.ErrInvalidAPIKey)
 	}
 
 	id, err := useCase.ids.NextID(ctx)
@@ -49,18 +62,19 @@ func (useCase *APIKey) Issue(ctx context.Context, name string, scope domain.APIK
 		return domain.IssuedAPIKey{}, fmt.Errorf("generate api key id: %w", err)
 	}
 
-	secret, err := generateSecret(apiKeySecretBytes)
+	secret, err := generateAPIKeySecret(apiKeySecretBytes)
 	if err != nil {
 		return domain.IssuedAPIKey{}, fmt.Errorf("generate api key secret: %w", err)
 	}
 
-	hash := HashAPIKey(secret)
 	key := domain.APIKey{
-		ID:        id,
-		Name:      cleanedName,
-		Hash:      hash,
-		Scope:     scope,
-		CreatedAt: useCase.now().UTC(),
+		ID:          id,
+		Name:        cleanedName,
+		Description: strings.TrimSpace(request.Description),
+		Hash:        HashAPIKey(secret),
+		Scopes:      scopes,
+		CreatedAt:   now,
+		ExpiresAt:   request.ExpiresAt,
 	}
 	if err := useCase.repository.Create(ctx, key); err != nil {
 		return domain.IssuedAPIKey{}, fmt.Errorf("persist api key: %w", err)
@@ -91,7 +105,9 @@ func (useCase *APIKey) Revoke(ctx context.Context, id string) error {
 
 // Resolve looks up the API key matching the supplied plaintext token,
 // records its usage and returns the domain representation. Returns
-// ErrAPIKeyNotFound when the token is missing, revoked or unknown.
+// ErrAPIKeyNotFound when the token is missing or unknown,
+// ErrAPIKeyRevoked when the key has been revoked or ErrAPIKeyExpired
+// when its expiry is in the past.
 func (useCase *APIKey) Resolve(ctx context.Context, secret string) (domain.APIKey, error) {
 	cleaned := strings.TrimSpace(secret)
 	if cleaned == "" {
@@ -105,6 +121,12 @@ func (useCase *APIKey) Resolve(ctx context.Context, secret string) (domain.APIKe
 			return domain.APIKey{}, err
 		}
 		return domain.APIKey{}, fmt.Errorf("resolve api key: %w", err)
+	}
+	if key.IsRevoked() {
+		return domain.APIKey{}, domain.ErrAPIKeyRevoked
+	}
+	if key.IsExpired(useCase.now().UTC()) {
+		return domain.APIKey{}, domain.ErrAPIKeyExpired
 	}
 	_ = useCase.repository.TouchLastUsed(ctx, key.ID)
 	return key, nil
@@ -127,7 +149,7 @@ func extractRawSecret(token string) string {
 	return token
 }
 
-func generateSecret(byteLen int) (string, error) {
+func generateAPIKeySecret(byteLen int) (string, error) {
 	buffer := make([]byte, byteLen)
 	if _, err := rand.Read(buffer); err != nil {
 		return "", err

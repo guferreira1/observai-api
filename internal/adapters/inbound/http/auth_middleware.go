@@ -50,21 +50,68 @@ type AuthPrincipal struct {
 	KeyID  string
 	UserID string
 	Name   string
-	Scope  domain.APIKeyScope
+	Scopes []domain.APIKeyScope
 	Role   domain.Role
 }
 
+// HasScope reports whether the principal carries the supplied scope value.
+//
+// User principals derive their scope set from the role: admin has every
+// scope, operator covers analysis + chat writes, viewer covers reads only.
+func (principal AuthPrincipal) HasScope(target domain.APIKeyScope) bool {
+	if principal.Source == AuthSourceUser {
+		for _, scope := range roleScopeSet(principal.Role) {
+			if scope == target {
+				return true
+			}
+		}
+		return false
+	}
+	for _, scope := range principal.Scopes {
+		if scope == target {
+			return true
+		}
+	}
+	return false
+}
+
 // EffectiveRole maps API-key scopes to user roles so authorization checks
-// can be written uniformly. Admin keys map to RoleAdmin, default keys to
-// RoleOperator (they may submit analyses and use the chat).
+// can be written uniformly. Scopes carrying admin:* map to RoleAdmin; any
+// write scope (analysis:write or chat:write) maps to RoleOperator;
+// anything else falls back to RoleViewer.
 func (principal AuthPrincipal) EffectiveRole() domain.Role {
 	if principal.Source == AuthSourceUser {
 		return principal.Role
 	}
-	if principal.Scope == domain.APIKeyScopeAdmin {
-		return domain.RoleAdmin
+	hasWrite := false
+	for _, scope := range principal.Scopes {
+		switch scope {
+		case domain.APIKeyScopeAdminRead, domain.APIKeyScopeAdminWrite:
+			return domain.RoleAdmin
+		case domain.APIKeyScopeAnalysisWrite, domain.APIKeyScopeChatWrite:
+			hasWrite = true
+		}
 	}
-	return domain.RoleOperator
+	if hasWrite {
+		return domain.RoleOperator
+	}
+	return domain.RoleViewer
+}
+
+func roleScopeSet(role domain.Role) []domain.APIKeyScope {
+	switch role {
+	case domain.RoleAdmin:
+		return domain.AllAPIKeyScopes()
+	case domain.RoleOperator:
+		return []domain.APIKeyScope{
+			domain.APIKeyScopeAnalysisRead,
+			domain.APIKeyScopeAnalysisWrite,
+			domain.APIKeyScopeChatWrite,
+		}
+	case domain.RoleViewer:
+		return []domain.APIKeyScope{domain.APIKeyScopeAnalysisRead}
+	}
+	return nil
 }
 
 // PrincipalFromContext returns the authenticated principal previously
@@ -108,7 +155,7 @@ func authMiddleware(config AuthConfig) func(stdhttp.Handler) stdhttp.Handler {
 	openPrincipal := AuthPrincipal{
 		Source: AuthSourceAPIKey,
 		Name:   "anonymous",
-		Scope:  domain.APIKeyScopeAdmin,
+		Scopes: domain.AllAPIKeyScopes(),
 	}
 
 	return func(next stdhttp.Handler) stdhttp.Handler {
@@ -149,7 +196,7 @@ func authMiddleware(config AuthConfig) func(stdhttp.Handler) stdhttp.Handler {
 							Source: AuthSourceAPIKey,
 							KeyID:  persisted.ID,
 							Name:   persisted.Name,
-							Scope:  persisted.Scope,
+							Scopes: persisted.Scopes,
 						}
 						ok = true
 					}
@@ -217,12 +264,41 @@ func RequireRole(roles ...domain.Role) func(stdhttp.HandlerFunc) stdhttp.Handler
 	}
 }
 
+// RequireScope returns a wrapper that allows only requests whose principal
+// carries every supplied scope.
+func RequireScope(scopes ...domain.APIKeyScope) func(stdhttp.HandlerFunc) stdhttp.HandlerFunc {
+	return func(next stdhttp.HandlerFunc) stdhttp.HandlerFunc {
+		return func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+			principal, ok := PrincipalFromContext(request.Context())
+			if !ok {
+				writeForbidden(writer)
+				return
+			}
+			for _, scope := range scopes {
+				if !principal.HasScope(scope) {
+					writeForbidden(writer)
+					return
+				}
+			}
+			next(writer, request)
+		}
+	}
+}
+
 func resolveStaticKey(token string, staticKeys, adminKeys map[string]bool) (AuthPrincipal, bool) {
 	if adminKeys[token] {
-		return AuthPrincipal{Source: AuthSourceAPIKey, Name: "static-admin", Scope: domain.APIKeyScopeAdmin}, true
+		return AuthPrincipal{Source: AuthSourceAPIKey, Name: "static-admin", Scopes: domain.AllAPIKeyScopes()}, true
 	}
 	if staticKeys[token] {
-		return AuthPrincipal{Source: AuthSourceAPIKey, Name: "static-default", Scope: domain.APIKeyScopeDefault}, true
+		return AuthPrincipal{
+			Source: AuthSourceAPIKey,
+			Name:   "static-default",
+			Scopes: []domain.APIKeyScope{
+				domain.APIKeyScopeAnalysisRead,
+				domain.APIKeyScopeAnalysisWrite,
+				domain.APIKeyScopeChatWrite,
+			},
+		}, true
 	}
 	return AuthPrincipal{}, false
 }

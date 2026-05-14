@@ -12,16 +12,19 @@ import (
 )
 
 const createAPIKey = `-- name: CreateAPIKey :exec
-INSERT INTO api_keys (id, name, key_hash, scope, created_at)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO api_keys (id, name, key_hash, scope, scopes, description, expires_at, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type CreateAPIKeyParams struct {
-	ID        string             `json:"id"`
-	Name      string             `json:"name"`
-	KeyHash   string             `json:"key_hash"`
-	Scope     string             `json:"scope"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	KeyHash     string             `json:"key_hash"`
+	Scope       string             `json:"scope"`
+	Scopes      []string           `json:"scopes"`
+	Description pgtype.Text        `json:"description"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) error {
@@ -30,26 +33,44 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) erro
 		arg.Name,
 		arg.KeyHash,
 		arg.Scope,
+		arg.Scopes,
+		arg.Description,
+		arg.ExpiresAt,
 		arg.CreatedAt,
 	)
 	return err
 }
 
 const findAPIKeyByHash = `-- name: FindAPIKeyByHash :one
-SELECT id, name, key_hash, scope, created_at, last_used_at, revoked_at
+SELECT id, name, key_hash, scope, scopes, description, expires_at, created_at, last_used_at, revoked_at
 FROM api_keys
 WHERE key_hash = $1
-  AND revoked_at IS NULL
 `
 
-func (q *Queries) FindAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error) {
+type FindAPIKeyByHashRow struct {
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	KeyHash     string             `json:"key_hash"`
+	Scope       string             `json:"scope"`
+	Scopes      []string           `json:"scopes"`
+	Description pgtype.Text        `json:"description"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+}
+
+func (q *Queries) FindAPIKeyByHash(ctx context.Context, keyHash string) (FindAPIKeyByHashRow, error) {
 	row := q.db.QueryRow(ctx, findAPIKeyByHash, keyHash)
-	var i ApiKey
+	var i FindAPIKeyByHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
 		&i.KeyHash,
 		&i.Scope,
+		&i.Scopes,
+		&i.Description,
+		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.LastUsedAt,
 		&i.RevokedAt,
@@ -58,7 +79,7 @@ func (q *Queries) FindAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey,
 }
 
 const listAPIKeys = `-- name: ListAPIKeys :many
-SELECT id, name, key_hash, scope, created_at, last_used_at, revoked_at
+SELECT id, name, key_hash, scope, scopes, description, expires_at, created_at, last_used_at, revoked_at
 FROM api_keys
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $1
@@ -69,20 +90,36 @@ type ListAPIKeysParams struct {
 	ResultLimit  int32 `json:"result_limit"`
 }
 
-func (q *Queries) ListAPIKeys(ctx context.Context, arg ListAPIKeysParams) ([]ApiKey, error) {
+type ListAPIKeysRow struct {
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	KeyHash     string             `json:"key_hash"`
+	Scope       string             `json:"scope"`
+	Scopes      []string           `json:"scopes"`
+	Description pgtype.Text        `json:"description"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+}
+
+func (q *Queries) ListAPIKeys(ctx context.Context, arg ListAPIKeysParams) ([]ListAPIKeysRow, error) {
 	rows, err := q.db.Query(ctx, listAPIKeys, arg.ResultOffset, arg.ResultLimit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ApiKey{}
+	items := []ListAPIKeysRow{}
 	for rows.Next() {
-		var i ApiKey
+		var i ListAPIKeysRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.KeyHash,
 			&i.Scope,
+			&i.Scopes,
+			&i.Description,
+			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.LastUsedAt,
 			&i.RevokedAt,
