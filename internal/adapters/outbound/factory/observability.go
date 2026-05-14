@@ -8,8 +8,11 @@ import (
 	"context"
 
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/composite"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/datadog"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/dynatrace"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/elasticsearch"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/loki"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/newrelic"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/null"
 	prometheusadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/prometheus"
 	"github.com/guferreira1/observai-api/internal/core/policy"
@@ -48,6 +51,9 @@ var collectorBuilders = map[string]collectorBuilder{
 	"loki":          buildLokiCollector,
 	"elasticsearch": buildElasticsearchCollector,
 	"opensearch":    buildElasticsearchCollector,
+	"dynatrace":     buildDynatraceCollector,
+	"datadog":       buildDatadogCollector,
+	"newrelic":      buildNewRelicCollector,
 }
 
 // BuildObservability translates cfg.Observability into a single composite
@@ -228,6 +234,110 @@ func buildElasticsearchCollector(provider config.ObservabilityProviderConfig, de
 			Name:    name,
 			Type:    providerType,
 			Signals: signals,
+		}, nil
+}
+
+func buildDynatraceCollector(provider config.ObservabilityProviderConfig, deps Dependencies, _ *CollectorClients) (composite.NamedCollector, ProviderCapability, error) {
+	url := strings.TrimSpace(provider.URL)
+	if url == "" {
+		return composite.NamedCollector{}, ProviderCapability{}, fmt.Errorf("dynatrace provider requires a non-empty url")
+	}
+	apiToken := strings.TrimSpace(provider.Options["api_token"])
+	if reference := strings.TrimSpace(provider.Options["api_token_ref"]); reference != "" {
+		resolved, err := resolveCredential(context.Background(), deps.Credentials, reference)
+		if err != nil {
+			return composite.NamedCollector{}, ProviderCapability{}, fmt.Errorf("resolve dynatrace api token: %w", err)
+		}
+		apiToken = resolved
+	}
+	client, err := dynatrace.NewClient(dynatrace.ClientOptions{
+		BaseURL:  url,
+		APIToken: apiToken,
+		Timeout:  defaultTimeout(provider.Timeout, 15*time.Second),
+		Observer: deps.Observer,
+	})
+	if err != nil {
+		return composite.NamedCollector{}, ProviderCapability{}, err
+	}
+	name := capabilityName(provider)
+	return composite.NamedCollector{
+			Name:      name,
+			Collector: dynatrace.NewSignalCollector(client, dynatrace.SignalCollectorOptions{}),
+		}, ProviderCapability{
+			Name:    name,
+			Type:    "dynatrace",
+			Signals: nonEmptyStrings(provider.Signals, "metrics"),
+		}, nil
+}
+
+func buildDatadogCollector(provider config.ObservabilityProviderConfig, deps Dependencies, _ *CollectorClients) (composite.NamedCollector, ProviderCapability, error) {
+	url := strings.TrimSpace(provider.URL)
+	if url == "" {
+		return composite.NamedCollector{}, ProviderCapability{}, fmt.Errorf("datadog provider requires a non-empty url")
+	}
+	credentials := strings.TrimSpace(provider.Options["credentials"])
+	if reference := strings.TrimSpace(provider.Options["credentials_ref"]); reference != "" {
+		resolved, err := resolveCredential(context.Background(), deps.Credentials, reference)
+		if err != nil {
+			return composite.NamedCollector{}, ProviderCapability{}, fmt.Errorf("resolve datadog credentials: %w", err)
+		}
+		credentials = resolved
+	}
+	client, err := datadog.NewClient(datadog.ClientOptions{
+		BaseURL:     url,
+		Credentials: credentials,
+		Timeout:     defaultTimeout(provider.Timeout, 15*time.Second),
+		Observer:    deps.Observer,
+	})
+	if err != nil {
+		return composite.NamedCollector{}, ProviderCapability{}, err
+	}
+	name := capabilityName(provider)
+	return composite.NamedCollector{
+			Name:      name,
+			Collector: datadog.NewSignalCollector(client, datadog.SignalCollectorOptions{}),
+		}, ProviderCapability{
+			Name:    name,
+			Type:    "datadog",
+			Signals: nonEmptyStrings(provider.Signals, "metrics"),
+		}, nil
+}
+
+func buildNewRelicCollector(provider config.ObservabilityProviderConfig, deps Dependencies, _ *CollectorClients) (composite.NamedCollector, ProviderCapability, error) {
+	url := strings.TrimSpace(provider.URL)
+	if url == "" {
+		return composite.NamedCollector{}, ProviderCapability{}, fmt.Errorf("newrelic provider requires a non-empty url")
+	}
+	apiKey := strings.TrimSpace(provider.Options["api_key"])
+	if reference := strings.TrimSpace(provider.Options["api_key_ref"]); reference != "" {
+		resolved, err := resolveCredential(context.Background(), deps.Credentials, reference)
+		if err != nil {
+			return composite.NamedCollector{}, ProviderCapability{}, fmt.Errorf("resolve newrelic api key: %w", err)
+		}
+		apiKey = resolved
+	}
+	accountID := strings.TrimSpace(provider.Options["account_id"])
+	if accountID == "" {
+		return composite.NamedCollector{}, ProviderCapability{}, fmt.Errorf("newrelic provider requires an account_id option")
+	}
+	client, err := newrelic.NewClient(newrelic.ClientOptions{
+		BaseURL:   url,
+		APIKey:    apiKey,
+		AccountID: accountID,
+		Timeout:   defaultTimeout(provider.Timeout, 15*time.Second),
+		Observer:  deps.Observer,
+	})
+	if err != nil {
+		return composite.NamedCollector{}, ProviderCapability{}, err
+	}
+	name := capabilityName(provider)
+	return composite.NamedCollector{
+			Name:      name,
+			Collector: newrelic.NewSignalCollector(client, newrelic.SignalCollectorOptions{}),
+		}, ProviderCapability{
+			Name:    name,
+			Type:    "newrelic",
+			Signals: nonEmptyStrings(provider.Signals, "metrics"),
 		}, nil
 }
 
