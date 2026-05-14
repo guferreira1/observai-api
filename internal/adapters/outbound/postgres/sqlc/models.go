@@ -81,6 +81,28 @@ type AuditLog struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type RefreshToken struct {
+	ID         string             `json:"id"`
+	UserID     string             `json:"user_id"`
+	TokenHash  string             `json:"token_hash"`
+	FamilyID   string             `json:"family_id"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+	ReplacedBy pgtype.Text        `json:"replaced_by"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type User struct {
+	ID           string             `json:"id"`
+	Email        string             `json:"email"`
+	PasswordHash string             `json:"password_hash"`
+	Role         string             `json:"role"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+}
+
 type WebhookSubscription struct {
 	ID         string             `json:"id"`
 	Name       string             `json:"name"`

@@ -15,6 +15,7 @@ import (
 	uuidadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/uuid"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 	"github.com/guferreira1/observai-api/internal/platform/config"
+	"github.com/guferreira1/observai-api/internal/platform/crypto"
 	"github.com/guferreira1/observai-api/internal/platform/dbmigrate"
 	"github.com/guferreira1/observai-api/internal/platform/health"
 	"github.com/guferreira1/observai-api/internal/platform/logger"
@@ -110,6 +111,30 @@ func main() {
 		apiKeyUseCase = usecase.NewAPIKey(store.apiKeys, ids)
 	}
 
+	var (
+		jwtSigner   *crypto.JWTSigner
+		authUseCase *usecase.Auth
+		userUseCase *usecase.User
+	)
+	if jwtSecret := cfg.JWT.Secret; jwtSecret != "" && store.users != nil && store.refreshTokens != nil {
+		signer, err := crypto.NewJWTSigner([]byte(jwtSecret), cfg.JWT.Issuer)
+		if err != nil {
+			log.Error("jwt signer initialization failed", "error", err)
+			os.Exit(1)
+		}
+		jwtSigner = signer
+		authUseCase = usecase.NewAuth(store.users, store.refreshTokens, jwtSigner, ids, usecase.AuthOptions{
+			AccessTokenTTL:  cfg.JWT.AccessTokenTTL,
+			RefreshTokenTTL: cfg.JWT.RefreshTokenTTL,
+		})
+		userUseCase = usecase.NewUser(store.users, store.refreshTokens, ids)
+	} else if cfg.Mode != config.ModeLocal {
+		log.Error("user authentication requires database, jwt secret and user repository wiring")
+		os.Exit(1)
+	} else if jwtSecret == "" {
+		log.Warn("jwt secret not configured; user authentication endpoints disabled")
+	}
+
 	var webhookUseCase *usecase.WebhookSubscriptions
 	if store.webhooks != nil {
 		webhookUseCase = usecase.NewWebhookSubscriptions(store.webhooks, store.webhookDispatcher, ids)
@@ -145,8 +170,16 @@ func main() {
 			StaticKeys: cfg.HTTPAuth.Keys,
 			AdminKeys:  cfg.HTTPAuth.AdminKeys,
 			Skip:       cfg.HTTPAuth.Skip,
-			Keys:       apiKeyUseCase,
+			APIKeys:    apiKeyUseCase,
+			Signer:     jwtSigner,
+			Users:      store.users,
 		},
+		Cookies: inboundhttp.CookieConfig{
+			Domain: cfg.Cookies.Domain,
+			Secure: cfg.Cookies.Secure,
+		},
+		Sessions:     authUseCase,
+		Users:        userUseCase,
 		Metrics:      metricsHandler,
 		Liveness:     health.LivenessHandler(),
 		Readiness:    health.ReadinessHandler(checker),

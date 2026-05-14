@@ -6,13 +6,22 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/guferreira1/observai-api/internal/platform/crypto"
 	"github.com/ilyakaznacheev/cleanenv"
 )
+
+// ErrEncryptionKeyMissing indicates the operator did not provide an
+// encryption key for a non-local mode. The configuration loader catches this
+// case via Validate; LoadEncryptionKey returns it as a sentinel so callers
+// running in local mode can react explicitly (e.g. by generating a volatile
+// key for the session).
+var ErrEncryptionKeyMissing = errors.New("encryption key not configured")
 
 // Mode identifies the runtime profile the API is running under.
 type Mode string
@@ -42,6 +51,11 @@ var prodRequiredConfigValues = []requiredConfigValue{
 	{envName: "OBSERVAI_REDIS_URL", missing: func(cfg Config) bool { return strings.TrimSpace(cfg.RedisURL) == "" }},
 	{envName: "OBSERVAI_PROMETHEUS_URL", missing: func(cfg Config) bool { return len(cfg.Observability.Providers) == 0 }},
 	{envName: "OBSERVAI_OLLAMA_URL", missing: func(cfg Config) bool { return len(cfg.LLM.Providers) == 0 }},
+}
+
+var nonLocalRequiredConfigValues = []requiredConfigValue{
+	{envName: "OBSERVAI_ENCRYPTION_KEY", missing: func(cfg Config) bool { return strings.TrimSpace(cfg.EncryptionKey) == "" }},
+	{envName: "OBSERVAI_JWT_SECRET", missing: func(cfg Config) bool { return strings.TrimSpace(cfg.JWT.Secret) == "" }},
 }
 
 // PrometheusConfig holds Prometheus adapter configuration.
@@ -157,6 +171,21 @@ type HTTPAuthConfig struct {
 	Skip         []string `yaml:"skip"`
 }
 
+// JWTConfig configures JWT signing and token lifetimes for the user
+// authentication flow.
+type JWTConfig struct {
+	Secret          string        `yaml:"secret" env:"OBSERVAI_JWT_SECRET"`
+	Issuer          string        `yaml:"issuer" env:"OBSERVAI_JWT_ISSUER" env-default:"observai-api"`
+	AccessTokenTTL  time.Duration `yaml:"access_token_ttl" env:"OBSERVAI_JWT_ACCESS_TTL" env-default:"15m"`
+	RefreshTokenTTL time.Duration `yaml:"refresh_token_ttl" env:"OBSERVAI_JWT_REFRESH_TTL" env-default:"168h"`
+}
+
+// CookieConfig controls how authentication cookies are issued.
+type CookieConfig struct {
+	Domain string `yaml:"domain" env:"OBSERVAI_AUTH_COOKIE_DOMAIN"`
+	Secure bool   `yaml:"secure" env:"OBSERVAI_AUTH_COOKIE_SECURE"`
+}
+
 // QueueConfig configures the asynchronous analysis worker pool.
 //
 // Concurrency caps how many analyses may be running at once on this instance.
@@ -177,12 +206,15 @@ type Config struct {
 	Mode                    Mode                `yaml:"mode" env:"OBSERVAI_MODE" env-default:"local"`
 	DatabaseDSN             string              `yaml:"database_dsn" env:"OBSERVAI_DATABASE_DSN"`
 	RedisURL                string              `yaml:"redis_url" env:"OBSERVAI_REDIS_URL"`
+	EncryptionKey           string              `yaml:"encryption_key" env:"OBSERVAI_ENCRYPTION_KEY"`
 	AnalysisContextCacheTTL time.Duration       `yaml:"analysis_context_cache_ttl" env:"OBSERVAI_ANALYSIS_CONTEXT_CACHE_TTL" env-default:"6h"`
 	HTTPRequestTimeout      time.Duration       `yaml:"http_request_timeout" env:"OBSERVAI_HTTP_REQUEST_TIMEOUT" env-default:"30s"`
 	HTTPMaxBodyBytes        int64               `yaml:"http_max_body_bytes" env:"OBSERVAI_HTTP_MAX_BODY_BYTES" env-default:"1048576"`
 	HTTPShutdownTimeout     time.Duration       `yaml:"http_shutdown_timeout" env:"OBSERVAI_HTTP_SHUTDOWN_TIMEOUT" env-default:"30s"`
 	HTTPRateLimit           HTTPRateLimitConfig `yaml:"http_rate_limit"`
 	HTTPAuth                HTTPAuthConfig      `yaml:"http_auth"`
+	JWT                     JWTConfig           `yaml:"jwt"`
+	Cookies                 CookieConfig        `yaml:"cookies"`
 	MigrateOnStart          bool                `yaml:"migrate_on_start" env:"OBSERVAI_MIGRATE_ON_START" env-default:"false"`
 	MigrationsDir           string              `yaml:"migrations_dir" env:"OBSERVAI_MIGRATIONS_DIR" env-default:"migrations"`
 	Queue                   QueueConfig         `yaml:"queue"`
@@ -292,23 +324,58 @@ func hasLLMProviderType(providers []LLMProviderConfig, providerType string) bool
 
 // Validate enforces mode-specific configuration requirements.
 //
-// In production every external dependency must be explicitly configured so the
-// API never silently falls back to in-memory or fake adapters.
+// Every non-local mode must supply an encryption key so credential material
+// never leaks to disk in plaintext. Production additionally requires every
+// external dependency to be explicitly configured, ensuring the API never
+// silently falls back to in-memory or fake adapters.
 func (cfg Config) Validate() error {
-	if cfg.Mode != ModeProd {
+	if cfg.Mode == ModeLocal {
 		return nil
 	}
 
 	var missing []string
-	for _, requirement := range prodRequiredConfigValues {
+	for _, requirement := range nonLocalRequiredConfigValues {
 		if requirement.missing(cfg) {
 			missing = append(missing, requirement.envName)
 		}
 	}
+	if cfg.Mode == ModeProd {
+		for _, requirement := range prodRequiredConfigValues {
+			if requirement.missing(cfg) {
+				missing = append(missing, requirement.envName)
+			}
+		}
+	}
 	if len(missing) > 0 {
-		return fmt.Errorf("mode=prod requires: %s", strings.Join(missing, ", "))
+		return fmt.Errorf("mode=%s requires: %s", cfg.Mode, strings.Join(missing, ", "))
+	}
+
+	if strings.TrimSpace(cfg.EncryptionKey) != "" {
+		if _, err := crypto.LoadKey(cfg.EncryptionKey); err != nil {
+			return fmt.Errorf("OBSERVAI_ENCRYPTION_KEY must decode to %d bytes (hex or base64): %w", crypto.KeyLength, err)
+		}
+	}
+	if jwtSecret := strings.TrimSpace(cfg.JWT.Secret); jwtSecret != "" && len(jwtSecret) < crypto.MinJWTSecretLength {
+		return fmt.Errorf("OBSERVAI_JWT_SECRET must be at least %d bytes", crypto.MinJWTSecretLength)
 	}
 	return nil
+}
+
+// LoadEncryptionKey decodes the configured encryption key into raw bytes.
+//
+// Returns ErrEncryptionKeyMissing when the key is absent. Returns
+// crypto.ErrInvalidKey wrapped with mode context when the encoded value is
+// not a valid 32-byte key (hex or base64).
+func (cfg Config) LoadEncryptionKey() ([]byte, error) {
+	encoded := strings.TrimSpace(cfg.EncryptionKey)
+	if encoded == "" {
+		return nil, ErrEncryptionKeyMissing
+	}
+	key, err := crypto.LoadKey(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode OBSERVAI_ENCRYPTION_KEY for mode=%s: %w", cfg.Mode, err)
+	}
+	return key, nil
 }
 
 func normalizeMode(mode Mode) Mode {

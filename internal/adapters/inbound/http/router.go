@@ -25,6 +25,7 @@ type RouterOptions struct {
 	MaxRequestBodyByte int64
 	RateLimit          RateLimitConfig
 	Auth               AuthConfig
+	Cookies            CookieConfig
 	Metrics            stdhttp.Handler
 	Liveness           stdhttp.Handler
 	Readiness          stdhttp.Handler
@@ -35,6 +36,8 @@ type RouterOptions struct {
 	Webhooks           *usecase.WebhookSubscriptions
 	AuditLog           *usecase.AuditLog
 	Retention          *usecase.AnalysisRetention
+	Sessions           *usecase.Auth
+	Users              *usecase.User
 }
 
 // Router handles HTTP requests for ObservAI API.
@@ -47,6 +50,8 @@ type Router struct {
 	webhooks  *usecase.WebhookSubscriptions
 	auditLog  *usecase.AuditLog
 	retention *usecase.AnalysisRetention
+	sessions  *usecase.Auth
+	users     *usecase.User
 	validate  *validator.Validate
 	logger    *slog.Logger
 	options   RouterOptions
@@ -71,6 +76,8 @@ func NewRouter(analysis *usecase.Analysis, chat *usecase.Chat, opts RouterOption
 		webhooks:  opts.Webhooks,
 		auditLog:  opts.AuditLog,
 		retention: opts.Retention,
+		sessions:  opts.Sessions,
+		users:     opts.Users,
 		validate:  validator.New(validator.WithRequiredStructEnabled()),
 		logger:    opts.Logger,
 		options:   opts,
@@ -93,6 +100,7 @@ func (router *Router) routes() {
 	router.mux.Use(recoverMiddleware(router.logger))
 	router.mux.Use(rateLimitMiddleware(newRateLimiter(router.options.RateLimit)))
 	router.mux.Use(authMiddleware(router.options.Auth))
+	router.mux.Use(csrfMiddleware())
 	router.mux.Use(auditMiddleware(router.auditLog, router.logger))
 	router.mux.Use(bodyLimitMiddleware(router.options.MaxRequestBodyByte))
 	router.mux.Use(timeoutMiddleware(router.options.RequestTimeout))
@@ -106,35 +114,56 @@ func (router *Router) routes() {
 	}
 	router.mux.Get("/v1/openapi.yaml", router.handleOpenAPI)
 	router.mux.Get("/v1/capabilities", router.handleCapabilities)
-	router.mux.Get("/v1/analyses", router.handleListAnalyses)
-	router.mux.Get("/v1/analyses/stats", router.handleAnalysisStats)
-	router.mux.Get("/v1/services", router.handleServicesAutocomplete)
-	router.mux.Post("/v1/analyses", router.handleSubmitAnalysis)
-	router.mux.Get("/v1/analyses/{analysisID}", router.handleGetAnalysis)
-	router.mux.Get("/v1/analyses/{analysisID}/export", router.handleExportAnalysis)
-	router.mux.Get("/v1/analyses/{analysisID}/traces", router.handleGetTraces)
-	router.mux.Get("/v1/jobs/{jobID}", router.handleGetAnalysisJob)
-	router.mux.Delete("/v1/jobs/{jobID}", router.handleCancelAnalysisJob)
-	router.mux.Post("/v1/analyses/{analysisID}/chat", router.handleChat)
-	router.mux.Get("/v1/analyses/{analysisID}/chat", router.handleChatHistory)
-	router.mux.Post("/v1/analyses/{analysisID}/chat/{messageID}/feedback", router.handleChatFeedback)
+
+	reader := RequireRole(domain.RoleViewer, domain.RoleOperator, domain.RoleAdmin)
+	writer := RequireRole(domain.RoleOperator, domain.RoleAdmin)
+	admin := RequireRole(domain.RoleAdmin)
+
+	router.mux.Method(stdhttp.MethodGet, "/v1/analyses", reader(router.handleListAnalyses))
+	router.mux.Method(stdhttp.MethodGet, "/v1/analyses/stats", reader(router.handleAnalysisStats))
+	router.mux.Method(stdhttp.MethodGet, "/v1/services", reader(router.handleServicesAutocomplete))
+	router.mux.Method(stdhttp.MethodPost, "/v1/analyses", writer(router.handleSubmitAnalysis))
+	router.mux.Method(stdhttp.MethodGet, "/v1/analyses/{analysisID}", reader(router.handleGetAnalysis))
+	router.mux.Method(stdhttp.MethodGet, "/v1/analyses/{analysisID}/export", reader(router.handleExportAnalysis))
+	router.mux.Method(stdhttp.MethodGet, "/v1/analyses/{analysisID}/traces", reader(router.handleGetTraces))
+	router.mux.Method(stdhttp.MethodGet, "/v1/jobs/{jobID}", reader(router.handleGetAnalysisJob))
+	router.mux.Method(stdhttp.MethodDelete, "/v1/jobs/{jobID}", writer(router.handleCancelAnalysisJob))
+	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat", writer(router.handleChat))
+	router.mux.Method(stdhttp.MethodGet, "/v1/analyses/{analysisID}/chat", reader(router.handleChatHistory))
+	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat/{messageID}/feedback", writer(router.handleChatFeedback))
+
+	if router.sessions != nil {
+		router.mux.Method(stdhttp.MethodPost, "/v1/auth/login", stdhttp.HandlerFunc(router.handleLogin))
+		router.mux.Method(stdhttp.MethodPost, "/v1/auth/logout", stdhttp.HandlerFunc(router.handleLogout))
+		router.mux.Method(stdhttp.MethodPost, "/v1/auth/refresh", stdhttp.HandlerFunc(router.handleRefresh))
+		router.mux.Method(stdhttp.MethodGet, "/v1/me", reader(router.handleMe))
+		router.mux.Method(stdhttp.MethodPatch, "/v1/me", reader(router.handleUpdateMe))
+		router.mux.Method(stdhttp.MethodPost, "/v1/me/password", reader(router.handleChangePassword))
+	}
 
 	if router.apiKeys != nil {
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/keys", RequireAdminScope(router.handleIssueAPIKey))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/keys", RequireAdminScope(router.handleListAPIKeys))
-		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/keys/{keyID}", RequireAdminScope(router.handleRevokeAPIKey))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/keys", admin(router.handleIssueAPIKey))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/keys", admin(router.handleListAPIKeys))
+		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/keys/{keyID}", admin(router.handleRevokeAPIKey))
 	}
 	if router.webhooks != nil {
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks", RequireAdminScope(router.handleCreateWebhook))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhooks", RequireAdminScope(router.handleListWebhooks))
-		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/webhooks/{webhookID}", RequireAdminScope(router.handleDeleteWebhook))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks", admin(router.handleCreateWebhook))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhooks", admin(router.handleListWebhooks))
+		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/webhooks/{webhookID}", admin(router.handleDeleteWebhook))
 	}
 	if router.auditLog != nil {
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/audit", RequireAdminScope(router.handleListAudit))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/audit", admin(router.handleListAudit))
 	}
 	if router.retention != nil {
-		router.mux.Delete("/v1/analyses/{analysisID}", router.handleDeleteAnalysis)
-		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/analyses", RequireAdminScope(router.handlePurgeAnalyses))
+		router.mux.Method(stdhttp.MethodDelete, "/v1/analyses/{analysisID}", writer(router.handleDeleteAnalysis))
+		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/analyses", admin(router.handlePurgeAnalyses))
+	}
+	if router.users != nil {
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/users", admin(router.handleListUsers))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/users", admin(router.handleCreateUser))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/users/{userID}", admin(router.handleGetUser))
+		router.mux.Method(stdhttp.MethodPatch, "/v1/admin/users/{userID}", admin(router.handleUpdateUser))
+		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/users/{userID}", admin(router.handleDeleteUser))
 	}
 
 	if router.options.Metrics != nil {

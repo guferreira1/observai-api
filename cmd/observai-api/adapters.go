@@ -27,6 +27,8 @@ type analysisStore struct {
 	webhookDispatcher ports.WebhookDispatcher
 	auditLog          ports.AuditLogRepository
 	retention         ports.AnalysisRetention
+	users             ports.UserRepository
+	refreshTokens     ports.RefreshTokenRepository
 	close             func()
 	postgres          *postgres.AnalysisRepository
 }
@@ -53,6 +55,8 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 	inMemoryRepository := inmemory.NewAnalysisRepository()
 	inMemoryJobs := inmemory.NewAnalysisJobRepository()
 	inMemoryFeedback := inmemory.NewChatFeedbackRepository()
+	inMemoryUsers := inmemory.NewUserRepository()
+	inMemoryRefresh := inmemory.NewRefreshTokenRepository()
 	databaseDSN := strings.TrimSpace(cfg.DatabaseDSN)
 	if databaseDSN == "" {
 		log.Warn("postgres repository disabled; using in-memory analysis repository")
@@ -61,6 +65,8 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 			chatHistory:   inMemoryRepository,
 			jobRepository: inMemoryJobs,
 			chatFeedback:  inMemoryFeedback,
+			users:         inMemoryUsers,
+			refreshTokens: inMemoryRefresh,
 			close:         func() {},
 		}
 	}
@@ -79,6 +85,8 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 	webhookRepository := postgres.NewWebhookRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 	auditLogRepository := postgres.NewAuditLogRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 	retentionRepository := postgres.NewAnalysisRetentionRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	userRepository := postgres.NewUserRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	refreshTokenRepository := postgres.NewRefreshTokenRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 	webhookDispatcher := webhooks.NewDispatcher(webhooks.DispatcherOptions{Logger: log, Observer: observer})
 
 	log.Info("postgres repository enabled")
@@ -92,6 +100,8 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 		webhookDispatcher: webhookDispatcher,
 		auditLog:          auditLogRepository,
 		retention:         retentionRepository,
+		users:             userRepository,
+		refreshTokens:     refreshTokenRepository,
 		close:             postgresRepository.Close,
 		postgres:          postgresRepository,
 	}

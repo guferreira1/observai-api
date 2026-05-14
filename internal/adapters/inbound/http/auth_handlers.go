@@ -1,0 +1,423 @@
+package http
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	stdhttp "net/http"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/guferreira1/observai-api/internal/core/domain"
+	"github.com/guferreira1/observai-api/internal/core/usecase"
+)
+
+// CookieConfig controls the attributes attached to authentication cookies.
+type CookieConfig struct {
+	Domain   string
+	Secure   bool
+	SameSite stdhttp.SameSite
+}
+
+func (config CookieConfig) sameSite() stdhttp.SameSite {
+	if config.SameSite == 0 {
+		return stdhttp.SameSiteLaxMode
+	}
+	return config.SameSite
+}
+
+// LoginRequestDto is the payload accepted by POST /v1/auth/login.
+type LoginRequestDto struct {
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required"`
+}
+
+// UpdateProfileRequestDto is the payload accepted by PATCH /v1/me.
+type UpdateProfileRequestDto struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+// ChangePasswordRequestDto is the payload accepted by POST /v1/me/password.
+type ChangePasswordRequestDto struct {
+	CurrentPassword string `json:"currentPassword" validate:"required"`
+	NewPassword     string `json:"newPassword" validate:"required,min=8"`
+}
+
+// CreateUserRequestDto is the payload accepted by POST /v1/admin/users.
+type CreateUserRequestDto struct {
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required,min=8"`
+	Role     string `json:"role" validate:"required,oneof=admin operator viewer"`
+}
+
+// UpdateUserRequestDto is the payload accepted by PATCH /v1/admin/users/{id}.
+type UpdateUserRequestDto struct {
+	Role     *string `json:"role,omitempty" validate:"omitempty,oneof=admin operator viewer"`
+	IsActive *bool   `json:"isActive,omitempty"`
+}
+
+// UserResponseDto is the public projection of a domain.User.
+type UserResponseDto struct {
+	ID          string  `json:"id"`
+	Email       string  `json:"email"`
+	Role        string  `json:"role"`
+	IsActive    bool    `json:"isActive"`
+	CreatedAt   string  `json:"createdAt"`
+	UpdatedAt   string  `json:"updatedAt"`
+	LastLoginAt *string `json:"lastLoginAt,omitempty"`
+}
+
+// SessionResponseDto is returned by POST /v1/auth/login and /v1/auth/refresh.
+//
+// Cookies carry the actual credentials; the body returns the user profile
+// and the CSRF token so the SPA can attach the X-CSRF-Token header on
+// subsequent mutations.
+type SessionResponseDto struct {
+	User      UserResponseDto `json:"user"`
+	CSRFToken string          `json:"csrfToken"`
+	ExpiresAt string          `json:"expiresAt"`
+}
+
+func toUserResponseDto(user domain.User) UserResponseDto {
+	dto := UserResponseDto{
+		ID:        user.ID,
+		Email:     user.Email,
+		Role:      string(user.Role),
+		IsActive:  user.IsActive,
+		CreatedAt: user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+	}
+	if user.LastLoginAt != nil {
+		last := user.LastLoginAt.Format(time.RFC3339)
+		dto.LastLoginAt = &last
+	}
+	return dto
+}
+
+func (router *Router) handleLogin(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	var dto LoginRequestDto
+	if err := decodeRequestBody(request, &dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	if err := router.validate.Struct(dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	session, err := router.sessions.Login(request.Context(), dto.Email, dto.Password)
+	if err != nil {
+		if errors.Is(err, domain.ErrInvalidCredentials) {
+			router.writeError(writer, requestID, startedAt, stdhttp.StatusUnauthorized, "invalid_credentials", "email or password is invalid")
+			return
+		}
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	csrf, err := generateCSRFToken()
+	if err != nil {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
+		return
+	}
+
+	router.setSessionCookies(writer, session, csrf)
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, SessionResponseDto{
+		User:      toUserResponseDto(session.User),
+		CSRFToken: csrf,
+		ExpiresAt: session.Access.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
+func (router *Router) handleLogout(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	if cookie, err := request.Cookie(RefreshCookieName); err == nil && cookie.Value != "" {
+		_ = router.sessions.Logout(request.Context(), cookie.Value)
+	}
+	router.clearSessionCookies(writer)
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
+}
+
+func (router *Router) handleRefresh(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	cookie, err := request.Cookie(RefreshCookieName)
+	if err != nil || strings.TrimSpace(cookie.Value) == "" {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusUnauthorized, "invalid_refresh_token", "refresh cookie missing or invalid")
+		return
+	}
+
+	session, err := router.sessions.Refresh(request.Context(), cookie.Value)
+	if err != nil {
+		router.clearSessionCookies(writer)
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusUnauthorized, "invalid_refresh_token", "refresh token is invalid or expired")
+		return
+	}
+
+	csrf, err := generateCSRFToken()
+	if err != nil {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
+		return
+	}
+
+	router.setSessionCookies(writer, session, csrf)
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, SessionResponseDto{
+		User:      toUserResponseDto(session.User),
+		CSRFToken: csrf,
+		ExpiresAt: session.Access.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
+func (router *Router) handleMe(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	principal, ok := PrincipalFromContext(request.Context())
+	if !ok || principal.Source != AuthSourceUser {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusForbidden, "forbidden", "user session required")
+		return
+	}
+	user, err := router.sessions.Me(request.Context(), principal.UserID)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toUserResponseDto(user))
+}
+
+func (router *Router) handleUpdateMe(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	principal, ok := PrincipalFromContext(request.Context())
+	if !ok || principal.Source != AuthSourceUser {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusForbidden, "forbidden", "user session required")
+		return
+	}
+
+	var dto UpdateProfileRequestDto
+	if err := decodeRequestBody(request, &dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	if err := router.validate.Struct(dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	user, err := router.sessions.UpdateProfile(request.Context(), principal.UserID, dto.Email)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toUserResponseDto(user))
+}
+
+func (router *Router) handleChangePassword(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	principal, ok := PrincipalFromContext(request.Context())
+	if !ok || principal.Source != AuthSourceUser {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusForbidden, "forbidden", "user session required")
+		return
+	}
+
+	var dto ChangePasswordRequestDto
+	if err := decodeRequestBody(request, &dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	if err := router.validate.Struct(dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	if err := router.sessions.ChangePassword(request.Context(), principal.UserID, dto.CurrentPassword, dto.NewPassword); err != nil {
+		if errors.Is(err, domain.ErrInvalidCredentials) {
+			router.writeError(writer, requestID, startedAt, stdhttp.StatusUnauthorized, "invalid_credentials", "current password is incorrect")
+			return
+		}
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.clearSessionCookies(writer)
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
+}
+
+func (router *Router) handleListUsers(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	limit, offset := paginationFromQuery(request)
+	users, err := router.users.List(request.Context(), limit, offset)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	items := make([]UserResponseDto, 0, len(users))
+	for _, user := range users {
+		items = append(items, toUserResponseDto(user))
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, items)
+}
+
+func (router *Router) handleCreateUser(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	var dto CreateUserRequestDto
+	if err := decodeRequestBody(request, &dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	if err := router.validate.Struct(dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	user, err := router.users.Create(request.Context(), dto.Email, dto.Password, domain.Role(dto.Role))
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, toUserResponseDto(user))
+}
+
+func (router *Router) handleGetUser(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	user, err := router.users.Get(request.Context(), chi.URLParam(request, "userID"))
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toUserResponseDto(user))
+}
+
+func (router *Router) handleUpdateUser(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	id := chi.URLParam(request, "userID")
+	var dto UpdateUserRequestDto
+	if err := decodeRequestBody(request, &dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	if err := router.validate.Struct(dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	updated, err := router.applyUserUpdate(request, id, dto)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toUserResponseDto(updated))
+}
+
+func (router *Router) applyUserUpdate(request *stdhttp.Request, id string, dto UpdateUserRequestDto) (domain.User, error) {
+	current, err := router.users.Get(request.Context(), id)
+	if err != nil {
+		return domain.User{}, err
+	}
+	if dto.Role != nil && *dto.Role != string(current.Role) {
+		current, err = router.users.UpdateRole(request.Context(), id, domain.Role(*dto.Role))
+		if err != nil {
+			return domain.User{}, err
+		}
+	}
+	if dto.IsActive != nil && *dto.IsActive != current.IsActive {
+		current, err = router.users.SetActive(request.Context(), id, *dto.IsActive)
+		if err != nil {
+			return domain.User{}, err
+		}
+	}
+	return current, nil
+}
+
+func (router *Router) handleDeleteUser(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	if err := router.users.Delete(request.Context(), chi.URLParam(request, "userID")); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
+}
+
+func (router *Router) setSessionCookies(writer stdhttp.ResponseWriter, session usecase.AuthSession, csrf string) {
+	cookieConfig := router.options.Cookies
+	stdhttp.SetCookie(writer, &stdhttp.Cookie{
+		Name:     SessionCookieName,
+		Value:    session.Access.Value,
+		Path:     "/",
+		Domain:   cookieConfig.Domain,
+		Expires:  session.Access.ExpiresAt,
+		MaxAge:   int(time.Until(session.Access.ExpiresAt).Seconds()),
+		HttpOnly: true,
+		Secure:   cookieConfig.Secure,
+		SameSite: cookieConfig.sameSite(),
+	})
+	stdhttp.SetCookie(writer, &stdhttp.Cookie{
+		Name:     RefreshCookieName,
+		Value:    session.Refresh.Value,
+		Path:     "/v1/auth",
+		Domain:   cookieConfig.Domain,
+		Expires:  session.Refresh.ExpiresAt,
+		MaxAge:   int(time.Until(session.Refresh.ExpiresAt).Seconds()),
+		HttpOnly: true,
+		Secure:   cookieConfig.Secure,
+		SameSite: cookieConfig.sameSite(),
+	})
+	stdhttp.SetCookie(writer, &stdhttp.Cookie{
+		Name:     CSRFCookieName,
+		Value:    csrf,
+		Path:     "/",
+		Domain:   cookieConfig.Domain,
+		Expires:  session.Access.ExpiresAt,
+		MaxAge:   int(time.Until(session.Access.ExpiresAt).Seconds()),
+		HttpOnly: false,
+		Secure:   cookieConfig.Secure,
+		SameSite: cookieConfig.sameSite(),
+	})
+}
+
+func (router *Router) clearSessionCookies(writer stdhttp.ResponseWriter) {
+	cookieConfig := router.options.Cookies
+	for _, name := range []string{SessionCookieName, RefreshCookieName, CSRFCookieName} {
+		path := "/"
+		if name == RefreshCookieName {
+			path = "/v1/auth"
+		}
+		stdhttp.SetCookie(writer, &stdhttp.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     path,
+			Domain:   cookieConfig.Domain,
+			MaxAge:   -1,
+			HttpOnly: name != CSRFCookieName,
+			Secure:   cookieConfig.Secure,
+			SameSite: cookieConfig.sameSite(),
+		})
+	}
+}
+
+func generateCSRFToken() (string, error) {
+	buffer := make([]byte, 32)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buffer), nil
+}
