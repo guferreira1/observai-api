@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: api-cd-${{ github.ref_name }}-${{ github.event.inputs.image_tag || 'tag' }}
+  group: api-cd-${{ github.event.inputs.image_tag }}
   cancel-in-progress: false
 
 env:
@@ -42,34 +42,23 @@ jobs:
             echo "dockerfile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Resolve image tag
+      - name: Validate image tag
         if: steps.detect.outputs.dockerfile == 'true'
-        id: version
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            IMAGE_TAG="${{ github.event.inputs.image_tag }}"
-          else
-            IMAGE_TAG="${GITHUB_REF_NAME}"
-          fi
-
-          if [[ ! "$IMAGE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+          if [[ ! "${{ github.event.inputs.image_tag }}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
             echo "Invalid image tag. Use semantic versioning, for example: v0.1.0 or 0.1.0-alpha.1"
             exit 1
           fi
-
-          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Set Docker tags
         if: steps.detect.outputs.dockerfile == 'true'
         id: tags
         shell: bash
         run: |
-          TAGS="${IMAGE_NAME}:${{ steps.version.outputs.image_tag }}"
+          TAGS="${IMAGE_NAME}:${{ github.event.inputs.image_tag }}"
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            TAGS="$TAGS,${IMAGE_NAME}:latest"
-          elif [ "${{ github.event.inputs.publish_latest }}" = "true" ]; then
+          if [ "${{ github.event.inputs.publish_latest }}" = "true" ]; then
             TAGS="$TAGS,${IMAGE_NAME}:latest"
           fi
 
@@ -95,7 +84,7 @@ jobs:
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           build-args: |
-            VERSION=${{ steps.version.outputs.image_tag }}
+            VERSION=${{ github.event.inputs.image_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
