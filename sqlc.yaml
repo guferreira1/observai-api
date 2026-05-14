@@ -8,6 +8,10 @@ sql:
       - migrations/000004_add_analysis_jobs_phase_and_canceled.up.sql
       - migrations/000005_add_analyses_filter_indexes.up.sql
       - migrations/000006_create_chat_feedback.up.sql
+      - migrations/000007_add_analyses_trace_id.up.sql
+      - migrations/000008_create_api_keys.up.sql
+      - migrations/000009_create_audit_log.up.sql
+      - migrations/000010_create_webhook_subscriptions.up.sql
     queries:
       - internal/adapters/outbound/postgres/query
     gen:

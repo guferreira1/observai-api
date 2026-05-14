@@ -11,6 +11,7 @@ INSERT INTO analyses (
     recommended_actions,
     code_level_insights,
     missing_evidence,
+    trace_id,
     created_at,
     updated_at
 ) VALUES (
@@ -25,6 +26,7 @@ INSERT INTO analyses (
     sqlc.arg(recommended_actions)::jsonb,
     sqlc.arg(code_level_insights),
     sqlc.arg(missing_evidence),
+    sqlc.arg(trace_id),
     sqlc.arg(created_at),
     now()
 )
@@ -39,6 +41,7 @@ ON CONFLICT (id) DO UPDATE SET
     recommended_actions = EXCLUDED.recommended_actions,
     code_level_insights = EXCLUDED.code_level_insights,
     missing_evidence = EXCLUDED.missing_evidence,
+    trace_id = EXCLUDED.trace_id,
     created_at = EXCLUDED.created_at,
     updated_at = now();
 
@@ -55,6 +58,7 @@ SELECT
     recommended_actions,
     code_level_insights,
     missing_evidence,
+    trace_id,
     created_at
 FROM analyses
 WHERE id = $1;
@@ -72,6 +76,7 @@ SELECT
     recommended_actions,
     code_level_insights,
     missing_evidence,
+    trace_id,
     created_at
 FROM analyses
 WHERE (sqlc.narg(severity)::text IS NULL OR severity = sqlc.narg(severity)::text)

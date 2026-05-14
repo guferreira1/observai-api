@@ -22,6 +22,7 @@ type Analysis struct {
 	MissingEvidence    []string           `json:"missing_evidence"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	TraceID            string             `json:"trace_id"`
 }
 
 type AnalysisChatFeedback struct {
@@ -55,4 +56,37 @@ type AnalysisJob struct {
 	Phase           string             `json:"phase"`
 	ProgressPercent int32              `json:"progress_percent"`
 	PhaseStartedAt  pgtype.Timestamptz `json:"phase_started_at"`
+}
+
+type ApiKey struct {
+	ID         string             `json:"id"`
+	Name       string             `json:"name"`
+	KeyHash    string             `json:"key_hash"`
+	Scope      string             `json:"scope"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type AuditLog struct {
+	ID         int64              `json:"id"`
+	RequestID  string             `json:"request_id"`
+	ApiKeyID   string             `json:"api_key_id"`
+	Actor      string             `json:"actor"`
+	Method     string             `json:"method"`
+	Path       string             `json:"path"`
+	Status     int32              `json:"status"`
+	DurationMs int64              `json:"duration_ms"`
+	Remote     string             `json:"remote"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type WebhookSubscription struct {
+	ID         string             `json:"id"`
+	Name       string             `json:"name"`
+	Url        string             `json:"url"`
+	Secret     string             `json:"secret"`
+	Event      string             `json:"event"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	DisabledAt pgtype.Timestamptz `json:"disabled_at"`
 }

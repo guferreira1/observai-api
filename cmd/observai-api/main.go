@@ -11,10 +11,11 @@ import (
 	"time"
 
 	inboundhttp "github.com/guferreira1/observai-api/internal/adapters/inbound/http"
-	"github.com/guferreira1/observai-api/internal/adapters/outbound/null"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/credentials"
 	uuidadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/uuid"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 	"github.com/guferreira1/observai-api/internal/platform/config"
+	"github.com/guferreira1/observai-api/internal/platform/dbmigrate"
 	"github.com/guferreira1/observai-api/internal/platform/health"
 	"github.com/guferreira1/observai-api/internal/platform/logger"
 	"github.com/guferreira1/observai-api/internal/platform/server"
@@ -33,6 +34,18 @@ func main() {
 	}
 
 	log := logger.New(cfg.Env)
+
+	if cfg.MigrateOnStart {
+		if err := dbmigrate.Run(dbmigrate.Options{
+			DatabaseDSN:   cfg.DatabaseDSN,
+			MigrationsDir: cfg.MigrationsDir,
+			Logger:        log,
+		}); err != nil {
+			log.Error("database migrations failed", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	metrics := telemetry.NewHTTPMetrics()
 	providerMetrics := telemetry.NewProviderMetrics(metrics.Registry())
 	metricsHandler := promhttp.HandlerFor(metrics.Registry(), promhttp.HandlerOpts{})
@@ -66,7 +79,8 @@ func main() {
 
 	ids := uuidadapter.NewIDGenerator()
 
-	providers, err := newProviders(cfg, log, providerMetrics)
+	credentialStore := credentials.NewDispatcher()
+	providers, err := newProviders(cfg, log, providerMetrics, credentialStore)
 	if err != nil {
 		log.Error("provider initialization failed", "error", err)
 		os.Exit(1)
@@ -89,7 +103,31 @@ func main() {
 		providers.responder,
 	).WithLocker(queue.locker).WithFeedbackRepository(store.chatFeedback)
 
-	traceUseCase := usecase.NewTrace(store.repository, null.NewTraceProvider())
+	traceUseCase := usecase.NewTrace(store.repository, providers.traces)
+
+	var apiKeyUseCase *usecase.APIKey
+	if store.apiKeys != nil {
+		apiKeyUseCase = usecase.NewAPIKey(store.apiKeys, ids)
+	}
+
+	var webhookUseCase *usecase.WebhookSubscriptions
+	if store.webhooks != nil {
+		webhookUseCase = usecase.NewWebhookSubscriptions(store.webhooks, store.webhookDispatcher, ids)
+	}
+
+	var auditLogUseCase *usecase.AuditLog
+	if store.auditLog != nil {
+		auditLogUseCase = usecase.NewAuditLog(store.auditLog)
+	}
+
+	var retentionUseCase *usecase.AnalysisRetention
+	if store.retention != nil {
+		retentionUseCase = usecase.NewAnalysisRetention(store.retention)
+	}
+
+	if webhookUseCase != nil {
+		analysisUseCase.WithCompletionNotifier(usecase.NewWebhookNotifier(webhookUseCase, log))
+	}
 
 	checker := health.NewChecker(2*time.Second, buildHealthProbes(store, cache, providers)...)
 
@@ -103,6 +141,12 @@ func main() {
 			RequestsPerSecond: cfg.HTTPRateLimit.RequestsPerSecond,
 			Burst:             cfg.HTTPRateLimit.Burst,
 		},
+		Auth: inboundhttp.AuthConfig{
+			StaticKeys: cfg.HTTPAuth.Keys,
+			AdminKeys:  cfg.HTTPAuth.AdminKeys,
+			Skip:       cfg.HTTPAuth.Skip,
+			Keys:       apiKeyUseCase,
+		},
 		Metrics:      metricsHandler,
 		Liveness:     health.LivenessHandler(),
 		Readiness:    health.ReadinessHandler(checker),
@@ -112,7 +156,11 @@ func main() {
 			LLM:           capabilities.LLM.Provider,
 			Observability: providerNames(capabilities.Observability),
 		},
-		Trace: traceUseCase,
+		Trace:     traceUseCase,
+		APIKeys:   apiKeyUseCase,
+		Webhooks:  webhookUseCase,
+		AuditLog:  auditLogUseCase,
+		Retention: retentionUseCase,
 	})
 	handler := metrics.Middleware(telemetry.WrapHandler("observai-api", router))
 	srv := server.New(cfg, handler)

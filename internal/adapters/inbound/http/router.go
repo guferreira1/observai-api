@@ -24,23 +24,32 @@ type RouterOptions struct {
 	RequestTimeout     time.Duration
 	MaxRequestBodyByte int64
 	RateLimit          RateLimitConfig
+	Auth               AuthConfig
 	Metrics            stdhttp.Handler
 	Liveness           stdhttp.Handler
 	Readiness          stdhttp.Handler
 	Capabilities       CapabilitiesResponse
 	Provider           ProviderSummary
 	Trace              *usecase.Trace
+	APIKeys            *usecase.APIKey
+	Webhooks           *usecase.WebhookSubscriptions
+	AuditLog           *usecase.AuditLog
+	Retention          *usecase.AnalysisRetention
 }
 
 // Router handles HTTP requests for ObservAI API.
 type Router struct {
-	mux      chi.Router
-	analysis *usecase.Analysis
-	chat     *usecase.Chat
-	traces   *usecase.Trace
-	validate *validator.Validate
-	logger   *slog.Logger
-	options  RouterOptions
+	mux       chi.Router
+	analysis  *usecase.Analysis
+	chat      *usecase.Chat
+	traces    *usecase.Trace
+	apiKeys   *usecase.APIKey
+	webhooks  *usecase.WebhookSubscriptions
+	auditLog  *usecase.AuditLog
+	retention *usecase.AnalysisRetention
+	validate  *validator.Validate
+	logger    *slog.Logger
+	options   RouterOptions
 }
 
 // NewRouter creates the ObservAI HTTP router.
@@ -54,13 +63,17 @@ func NewRouter(analysis *usecase.Analysis, chat *usecase.Chat, opts RouterOption
 	}
 
 	router := &Router{
-		mux:      chi.NewRouter(),
-		analysis: analysis,
-		chat:     chat,
-		traces:   opts.Trace,
-		validate: validator.New(validator.WithRequiredStructEnabled()),
-		logger:   opts.Logger,
-		options:  opts,
+		mux:       chi.NewRouter(),
+		analysis:  analysis,
+		chat:      chat,
+		traces:    opts.Trace,
+		apiKeys:   opts.APIKeys,
+		webhooks:  opts.Webhooks,
+		auditLog:  opts.AuditLog,
+		retention: opts.Retention,
+		validate:  validator.New(validator.WithRequiredStructEnabled()),
+		logger:    opts.Logger,
+		options:   opts,
 	}
 
 	router.routes()
@@ -79,6 +92,8 @@ func (router *Router) routes() {
 	router.mux.Use(loggerMiddleware(router.logger))
 	router.mux.Use(recoverMiddleware(router.logger))
 	router.mux.Use(rateLimitMiddleware(newRateLimiter(router.options.RateLimit)))
+	router.mux.Use(authMiddleware(router.options.Auth))
+	router.mux.Use(auditMiddleware(router.auditLog, router.logger))
 	router.mux.Use(bodyLimitMiddleware(router.options.MaxRequestBodyByte))
 	router.mux.Use(timeoutMiddleware(router.options.RequestTimeout))
 
@@ -103,6 +118,24 @@ func (router *Router) routes() {
 	router.mux.Post("/v1/analyses/{analysisID}/chat", router.handleChat)
 	router.mux.Get("/v1/analyses/{analysisID}/chat", router.handleChatHistory)
 	router.mux.Post("/v1/analyses/{analysisID}/chat/{messageID}/feedback", router.handleChatFeedback)
+
+	if router.apiKeys != nil {
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/keys", RequireAdminScope(router.handleIssueAPIKey))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/keys", RequireAdminScope(router.handleListAPIKeys))
+		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/keys/{keyID}", RequireAdminScope(router.handleRevokeAPIKey))
+	}
+	if router.webhooks != nil {
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks", RequireAdminScope(router.handleCreateWebhook))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhooks", RequireAdminScope(router.handleListWebhooks))
+		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/webhooks/{webhookID}", RequireAdminScope(router.handleDeleteWebhook))
+	}
+	if router.auditLog != nil {
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/audit", RequireAdminScope(router.handleListAudit))
+	}
+	if router.retention != nil {
+		router.mux.Delete("/v1/analyses/{analysisID}", router.handleDeleteAnalysis)
+		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/analyses", RequireAdminScope(router.handlePurgeAnalyses))
+	}
 
 	if router.options.Metrics != nil {
 		router.mux.Handle("/metrics", router.options.Metrics)

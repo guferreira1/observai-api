@@ -60,7 +60,8 @@ func (useCase *Trace) Get(ctx context.Context, analysisID string) (domain.TraceI
 		return domain.TraceInsights{}, fmt.Errorf("%w: analysis id is required", domain.ErrAnalysisNotFound)
 	}
 
-	if _, err := useCase.repository.Find(ctx, analysisID); err != nil {
+	analysis, err := useCase.repository.Find(ctx, analysisID)
+	if err != nil {
 		return domain.TraceInsights{}, fmt.Errorf("find analysis: %w", err)
 	}
 
@@ -68,7 +69,12 @@ func (useCase *Trace) Get(ctx context.Context, analysisID string) (domain.TraceI
 		return domain.TraceInsights{}, errors.New("trace provider not configured")
 	}
 
-	spans, err := useCase.traces.FetchSpans(ctx, analysisID)
+	traceReference := strings.TrimSpace(analysis.TraceID)
+	if traceReference == "" {
+		traceReference = analysisID
+	}
+
+	spans, err := useCase.traces.FetchSpans(ctx, traceReference)
 	if err != nil {
 		return domain.TraceInsights{}, fmt.Errorf("fetch trace spans: %w", err)
 	}

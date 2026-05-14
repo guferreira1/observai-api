@@ -189,8 +189,13 @@ type Recommendation struct {
 }
 
 // AnalysisResult describes the normalized output of an observability analysis.
+//
+// TraceID, when present, is the distributed trace identifier captured
+// during evidence collection. Trace providers (Jaeger, Tempo, OTLP) use
+// this value to retrieve spans for `GET /v1/analyses/{id}/traces`.
 type AnalysisResult struct {
 	ID                 string
+	TraceID            string
 	Summary            string
 	Severity           Severity
 	Confidence         Confidence

@@ -10,6 +10,7 @@ import (
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/postgres"
 	redisadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/redis"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/webhooks"
 	"github.com/guferreira1/observai-api/internal/core/ports"
 	"github.com/guferreira1/observai-api/internal/platform/config"
 	"github.com/guferreira1/observai-api/internal/platform/observability"
@@ -17,12 +18,17 @@ import (
 )
 
 type analysisStore struct {
-	repository    ports.AnalysisRepository
-	chatHistory   ports.ChatHistoryRepository
-	jobRepository ports.AnalysisJobRepository
-	chatFeedback  ports.ChatFeedbackRepository
-	close         func()
-	postgres      *postgres.AnalysisRepository
+	repository        ports.AnalysisRepository
+	chatHistory       ports.ChatHistoryRepository
+	jobRepository     ports.AnalysisJobRepository
+	chatFeedback      ports.ChatFeedbackRepository
+	apiKeys           ports.APIKeyRepository
+	webhooks          ports.WebhookRepository
+	webhookDispatcher ports.WebhookDispatcher
+	auditLog          ports.AuditLogRepository
+	retention         ports.AnalysisRetention
+	close             func()
+	postgres          *postgres.AnalysisRepository
 }
 
 type analysisContextCache struct {
@@ -69,15 +75,25 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 
 	jobRepository := postgres.NewAnalysisJobRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 	chatFeedbackRepository := postgres.NewChatFeedbackRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	apiKeyRepository := postgres.NewAPIKeyRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	webhookRepository := postgres.NewWebhookRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	auditLogRepository := postgres.NewAuditLogRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	retentionRepository := postgres.NewAnalysisRetentionRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	webhookDispatcher := webhooks.NewDispatcher(webhooks.DispatcherOptions{Logger: log, Observer: observer})
 
 	log.Info("postgres repository enabled")
 	return analysisStore{
-		repository:    postgresRepository,
-		chatHistory:   postgresRepository,
-		jobRepository: jobRepository,
-		chatFeedback:  chatFeedbackRepository,
-		close:         postgresRepository.Close,
-		postgres:      postgresRepository,
+		repository:        postgresRepository,
+		chatHistory:       postgresRepository,
+		jobRepository:     jobRepository,
+		chatFeedback:      chatFeedbackRepository,
+		apiKeys:           apiKeyRepository,
+		webhooks:          webhookRepository,
+		webhookDispatcher: webhookDispatcher,
+		auditLog:          auditLogRepository,
+		retention:         retentionRepository,
+		close:             postgresRepository.Close,
+		postgres:          postgresRepository,
 	}
 }
 

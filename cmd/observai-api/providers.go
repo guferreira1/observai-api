@@ -1,24 +1,29 @@
 package main
 
 import (
-	"fmt"
 	"log/slog"
-	"strings"
 
-	"github.com/guferreira1/observai-api/internal/adapters/outbound/null"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/factory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/ollama"
 	prometheusadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/prometheus"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/prompts"
-	"github.com/guferreira1/observai-api/internal/core/ports"
+	coreports "github.com/guferreira1/observai-api/internal/core/ports"
 	"github.com/guferreira1/observai-api/internal/platform/config"
 	"github.com/guferreira1/observai-api/internal/platform/observability"
 )
 
-// providers groups the runtime providers used by the analysis and chat use cases.
+// providers groups the runtime adapters used by the analysis and chat use cases.
+//
+// The composition root populates this struct through the outbound factory,
+// which dispatches construction by provider type. Typed client handles are
+// preserved so health probes can ping the underlying backends without
+// re-establishing connections.
 type providers struct {
-	collector         ports.SignalCollector
-	generator         ports.AnalysisGenerator
-	responder         ports.ChatResponder
+	collector         coreports.SignalCollector
+	generator         coreports.AnalysisGenerator
+	responder         coreports.ChatResponder
+	traces            coreports.TraceProvider
+	traceProviderName string
 	prometheus        *prometheusadapter.Client
 	ollama            *ollama.Client
 	llmProvider       string
@@ -31,87 +36,55 @@ type observabilityProvider struct {
 	signals []string
 }
 
-// newProviders selects real or null providers based on cfg.Mode.
+// newProviders resolves observability and LLM adapters via the outbound factory.
 //
-// In ModeProd, missing configuration must already have been rejected by
-// config.Validate(), so this function fails hard if construction errors occur.
-// In ModeLocal/ModeDev, missing endpoints fall back to the null adapters,
-// which return domain.ErrProviderNotConfigured at request time instead of
-// synthesizing observability data.
-func newProviders(cfg config.Config, log *slog.Logger, observer observability.ProviderObserver) (providers, error) {
-	loader := prompts.NewFileLoader(cfg.Prompts.Dir)
+// The dispatcher maps inside the factory enforce one builder per provider
+// type. When the operator declared no provider, the null adapters take
+// over and the request surface reports provider-not-configured per call.
+func newProviders(cfg config.Config, log *slog.Logger, observer observability.ProviderObserver, credentials coreports.CredentialStore) (providers, error) {
+	dependencies := factory.Dependencies{
+		Logger:       log,
+		Observer:     observer,
+		PromptLoader: prompts.NewFileLoader(cfg.Prompts.Dir),
+		Credentials:  credentials,
+	}
 
-	collector, prometheusClient, observabilityList, err := buildSignalCollector(cfg, log, observer)
+	observabilityResult, err := factory.BuildObservability(cfg, dependencies)
 	if err != nil {
 		return providers{}, err
 	}
 
-	generator, responder, ollamaClient, llmName, llmModel, err := buildLLMProviders(cfg, loader, log, observer)
+	llmResult, err := factory.BuildLLM(cfg, dependencies)
+	if err != nil {
+		return providers{}, err
+	}
+
+	traceResult, err := factory.BuildTraceProvider(cfg, dependencies)
 	if err != nil {
 		return providers{}, err
 	}
 
 	return providers{
-		collector:         collector,
-		generator:         generator,
-		responder:         responder,
-		prometheus:        prometheusClient,
-		ollama:            ollamaClient,
-		llmProvider:       llmName,
-		llmModel:          llmModel,
-		observabilityList: observabilityList,
+		collector:         observabilityResult.Collector,
+		generator:         llmResult.Generator,
+		responder:         llmResult.Responder,
+		traces:            traceResult.Provider,
+		traceProviderName: traceResult.Name,
+		prometheus:        observabilityResult.Clients.Prometheus,
+		ollama:            llmResult.Clients.Ollama,
+		llmProvider:       llmResult.Provider,
+		llmModel:          llmResult.Model,
+		observabilityList: toObservabilityProviders(observabilityResult.Capabilities),
 	}, nil
 }
 
-func buildSignalCollector(cfg config.Config, log *slog.Logger, observer observability.ProviderObserver) (ports.SignalCollector, *prometheusadapter.Client, []observabilityProvider, error) {
-	prometheusURL := strings.TrimSpace(cfg.Prometheus.URL)
-	if prometheusURL == "" {
-		if cfg.Mode == config.ModeProd {
-			return nil, nil, nil, fmt.Errorf("prometheus url is required in mode=prod")
-		}
-		log.Warn("prometheus signal collector disabled; signal collection endpoint will return provider-not-configured")
-		return null.NewSignalCollector(), nil, []observabilityProvider{{
-			name:    "none",
-			signals: []string{},
-		}}, nil
+func toObservabilityProviders(capabilities []factory.ProviderCapability) []observabilityProvider {
+	if len(capabilities) == 0 {
+		return []observabilityProvider{{name: "none", signals: []string{}}}
 	}
-
-	client, err := prometheusadapter.NewClient(prometheusadapter.ClientOptions{
-		BaseURL:  prometheusURL,
-		Timeout:  cfg.Prometheus.Timeout,
-		Observer: observer,
-	})
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("init prometheus client: %w", err)
+	out := make([]observabilityProvider, 0, len(capabilities))
+	for _, capability := range capabilities {
+		out = append(out, observabilityProvider{name: capability.Name, signals: capability.Signals})
 	}
-
-	log.Info("prometheus signal collector enabled", "url", prometheusURL)
-	return prometheusadapter.NewSignalCollector(client, prometheusadapter.SignalCollectorOptions{}), client, []observabilityProvider{{
-		name:    "prometheus",
-		signals: []string{"metrics"},
-	}}, nil
-}
-
-func buildLLMProviders(cfg config.Config, loader prompts.Loader, log *slog.Logger, observer observability.ProviderObserver) (ports.AnalysisGenerator, ports.ChatResponder, *ollama.Client, string, string, error) {
-	ollamaURL := strings.TrimSpace(cfg.Ollama.URL)
-	if ollamaURL == "" {
-		if cfg.Mode == config.ModeProd {
-			return nil, nil, nil, "", "", fmt.Errorf("ollama url is required in mode=prod")
-		}
-		log.Warn("ollama llm disabled; analysis and chat endpoints will return provider-not-configured")
-		return null.NewAnalysisGenerator(), null.NewChatResponder(), nil, "none", "", nil
-	}
-
-	client, err := ollama.NewClient(ollama.ClientOptions{
-		BaseURL:  ollamaURL,
-		Model:    cfg.Ollama.Model,
-		Timeout:  cfg.Ollama.Timeout,
-		Observer: observer,
-	})
-	if err != nil {
-		return nil, nil, nil, "", "", fmt.Errorf("init ollama client: %w", err)
-	}
-
-	log.Info("ollama llm enabled", "url", ollamaURL, "model", cfg.Ollama.Model)
-	return ollama.NewAnalysisGenerator(client, loader), ollama.NewChatResponder(client, loader), client, "ollama", cfg.Ollama.Model, nil
+	return out
 }

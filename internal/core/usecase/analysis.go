@@ -33,6 +33,8 @@ type Analysis struct {
 	enqueuer        ports.JobEnqueuer
 	severity        policy.SeverityPolicy
 	recommendations policy.RecommendationPolicy
+	redaction       policy.ChainRedactor
+	notifier        AnalysisCompletionNotifier
 	now             func() time.Time
 
 	activeCancelsMu sync.Mutex
@@ -65,6 +67,7 @@ func NewAnalysis(
 		ids:             ids,
 		severity:        policy.NewSeverityPolicy(),
 		recommendations: policy.NewRecommendationPolicy(),
+		redaction:       policy.NewDefaultRedactor(),
 		now:             time.Now,
 		activeCancels:   make(map[string]context.CancelFunc),
 	}
@@ -75,6 +78,31 @@ func NewAnalysis(
 func (useCase *Analysis) WithAsyncBackend(jobs ports.AnalysisJobRepository, enqueuer ports.JobEnqueuer) *Analysis {
 	useCase.jobs = jobs
 	useCase.enqueuer = enqueuer
+	return useCase
+}
+
+// WithRedaction replaces the default redaction chain. Useful for tests that
+// need to assert exact LLM input or for environments that have already
+// scrubbed the source data upstream.
+func (useCase *Analysis) WithRedaction(redaction policy.ChainRedactor) *Analysis {
+	useCase.redaction = redaction
+	return useCase
+}
+
+// AnalysisCompletionNotifier is invoked after a job transitions to completed
+// or failed. Implementations dispatch the result to external listeners
+// (webhooks, message buses) and must not block the caller; the worker
+// loop ignores the returned error so a degraded notifier never poisons
+// the analysis pipeline.
+type AnalysisCompletionNotifier interface {
+	NotifyAnalysisCompleted(ctx context.Context, result domain.AnalysisResult)
+	NotifyAnalysisFailed(ctx context.Context, jobID string, request domain.AnalysisRequest, reason string)
+}
+
+// WithCompletionNotifier wires a notifier invoked after RunAnalysisJob
+// transitions to a terminal state. Passing nil disables notifications.
+func (useCase *Analysis) WithCompletionNotifier(notifier AnalysisCompletionNotifier) *Analysis {
+	useCase.notifier = notifier
 	return useCase
 }
 
@@ -191,11 +219,17 @@ func (useCase *Analysis) RunAnalysisJob(ctx context.Context, jobID string) error
 		if markErr := useCase.jobs.MarkFailed(context.Background(), jobID, runErr.Error(), failedAt); markErr != nil {
 			return fmt.Errorf("mark analysis job failed after %v: %w", runErr, markErr)
 		}
+		if useCase.notifier != nil {
+			useCase.notifier.NotifyAnalysisFailed(context.Background(), jobID, job.Request, runErr.Error())
+		}
 		return runErr
 	}
 
 	if err := useCase.jobs.MarkCompleted(runCtx, jobID, result.ID, useCase.now().UTC()); err != nil {
 		return fmt.Errorf("mark analysis job completed: %w", err)
+	}
+	if useCase.notifier != nil {
+		useCase.notifier.NotifyAnalysisCompleted(context.Background(), result)
 	}
 	return nil
 }
@@ -284,6 +318,7 @@ func (useCase *Analysis) executeAnalyze(ctx context.Context, analysisID string, 
 	report(reporter, domain.PhaseNormalizing, 35)
 	assignEvidenceIDs(evidence)
 	relevant := policy.FilterEvidence(evidence, policy.RelevantEvidenceSpecification(request), maxLLMEvidenceItems)
+	relevant = useCase.redaction.RedactEvidence(relevant)
 
 	report(reporter, domain.PhaseCallingLLM, 55)
 	result, err := useCase.generator.Generate(ctx, request, relevant)

@@ -39,6 +39,7 @@ func toSaveAnalysisParams(result domain.AnalysisResult) (sqlc.SaveAnalysisParams
 		RecommendedActions: recommendations,
 		CodeLevelInsights:  nonNilStrings(result.CodeLevelInsights),
 		MissingEvidence:    nonNilStrings(result.MissingEvidence),
+		TraceID:            result.TraceID,
 		CreatedAt: pgtype.Timestamptz{
 			Time:  result.CreatedAt,
 			Valid: true,
@@ -69,6 +70,7 @@ func toDomainAnalysisResult(row sqlc.FindAnalysisRow) (domain.AnalysisResult, er
 	result.DetectedAnomalies = row.DetectedAnomalies
 	result.CodeLevelInsights = row.CodeLevelInsights
 	result.MissingEvidence = row.MissingEvidence
+	result.TraceID = row.TraceID
 	result.CreatedAt = row.CreatedAt.Time.UTC()
 
 	return result, nil
@@ -97,6 +99,7 @@ func toDomainAnalysisResultFromList(row sqlc.ListAnalysesRow) (domain.AnalysisRe
 	result.DetectedAnomalies = row.DetectedAnomalies
 	result.CodeLevelInsights = row.CodeLevelInsights
 	result.MissingEvidence = row.MissingEvidence
+	result.TraceID = row.TraceID
 	result.CreatedAt = row.CreatedAt.Time.UTC()
 
 	return result, nil

@@ -276,6 +276,7 @@ SELECT
     recommended_actions,
     code_level_insights,
     missing_evidence,
+    trace_id,
     created_at
 FROM analyses
 WHERE id = $1
@@ -293,6 +294,7 @@ type FindAnalysisRow struct {
 	RecommendedActions []byte             `json:"recommended_actions"`
 	CodeLevelInsights  []string           `json:"code_level_insights"`
 	MissingEvidence    []string           `json:"missing_evidence"`
+	TraceID            string             `json:"trace_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -311,6 +313,7 @@ func (q *Queries) FindAnalysis(ctx context.Context, id string) (FindAnalysisRow,
 		&i.RecommendedActions,
 		&i.CodeLevelInsights,
 		&i.MissingEvidence,
+		&i.TraceID,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -329,6 +332,7 @@ SELECT
     recommended_actions,
     code_level_insights,
     missing_evidence,
+    trace_id,
     created_at
 FROM analyses
 WHERE ($1::text IS NULL OR severity = $1::text)
@@ -418,6 +422,7 @@ type ListAnalysesRow struct {
 	RecommendedActions []byte             `json:"recommended_actions"`
 	CodeLevelInsights  []string           `json:"code_level_insights"`
 	MissingEvidence    []string           `json:"missing_evidence"`
+	TraceID            string             `json:"trace_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -454,6 +459,7 @@ func (q *Queries) ListAnalyses(ctx context.Context, arg ListAnalysesParams) ([]L
 			&i.RecommendedActions,
 			&i.CodeLevelInsights,
 			&i.MissingEvidence,
+			&i.TraceID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -479,6 +485,7 @@ INSERT INTO analyses (
     recommended_actions,
     code_level_insights,
     missing_evidence,
+    trace_id,
     created_at,
     updated_at
 ) VALUES (
@@ -494,6 +501,7 @@ INSERT INTO analyses (
     $10,
     $11,
     $12,
+    $13,
     now()
 )
 ON CONFLICT (id) DO UPDATE SET
@@ -507,6 +515,7 @@ ON CONFLICT (id) DO UPDATE SET
     recommended_actions = EXCLUDED.recommended_actions,
     code_level_insights = EXCLUDED.code_level_insights,
     missing_evidence = EXCLUDED.missing_evidence,
+    trace_id = EXCLUDED.trace_id,
     created_at = EXCLUDED.created_at,
     updated_at = now()
 `
@@ -523,6 +532,7 @@ type SaveAnalysisParams struct {
 	RecommendedActions []byte             `json:"recommended_actions"`
 	CodeLevelInsights  []string           `json:"code_level_insights"`
 	MissingEvidence    []string           `json:"missing_evidence"`
+	TraceID            string             `json:"trace_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -539,6 +549,7 @@ func (q *Queries) SaveAnalysis(ctx context.Context, arg SaveAnalysisParams) erro
 		arg.RecommendedActions,
 		arg.CodeLevelInsights,
 		arg.MissingEvidence,
+		arg.TraceID,
 		arg.CreatedAt,
 	)
 	return err

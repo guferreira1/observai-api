@@ -101,6 +101,90 @@ func TestLoadProdAcceptsFullyConfiguredEnvironment(t *testing.T) {
 	assert.Equal(t, ModeProd, cfg.Mode)
 }
 
+func TestLoadMigratesLegacyPrometheusAndOllamaIntoProviderLists(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	t.Setenv("OBSERVAI_PROMETHEUS_URL", "http://prom:9090")
+	t.Setenv("OBSERVAI_OLLAMA_URL", "http://ollama:11434")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Len(t, cfg.Observability.Providers, 1)
+	assert.Equal(t, "prometheus", cfg.Observability.Providers[0].Type)
+	assert.Equal(t, "http://prom:9090", cfg.Observability.Providers[0].URL)
+	assert.Contains(t, cfg.Observability.Providers[0].Signals, "metrics")
+
+	require.Len(t, cfg.LLM.Providers, 1)
+	assert.Equal(t, "ollama", cfg.LLM.Providers[0].Type)
+	assert.Equal(t, "http://ollama:11434", cfg.LLM.Providers[0].URL)
+	assert.Equal(t, "ollama", cfg.LLM.Active)
+}
+
+func TestLoadHonoursExplicitProvidersListInYAML(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	configPath := filepath.Join(t.TempDir(), "observai.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+mode: dev
+observability:
+  providers:
+    - type: prometheus
+      name: prom-prod
+      url: http://prom.svc:9090
+      timeout: 8s
+      signals: [metrics]
+    - type: loki
+      name: loki-prod
+      url: http://loki:3100
+      signals: [logs]
+llm:
+  providers:
+    - type: ollama
+      name: local-ollama
+      url: http://localhost:11434
+      model: llama3
+  active: local-ollama
+`), 0o600))
+
+	t.Setenv("OBSERVAI_CONFIG_FILE", configPath)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Len(t, cfg.Observability.Providers, 2)
+	assert.Equal(t, "prom-prod", cfg.Observability.Providers[0].Name)
+	assert.Equal(t, "loki", cfg.Observability.Providers[1].Type)
+
+	require.Len(t, cfg.LLM.Providers, 1)
+	assert.Equal(t, "local-ollama", cfg.LLM.Active)
+}
+
+func TestLoadDoesNotDuplicateLegacyProviderWhenAlsoDeclaredInList(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	configPath := filepath.Join(t.TempDir(), "observai.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+prometheus:
+  url: http://legacy:9090
+observability:
+  providers:
+    - type: prometheus
+      name: explicit
+      url: http://new:9090
+      signals: [metrics]
+`), 0o600))
+
+	t.Setenv("OBSERVAI_CONFIG_FILE", configPath)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	require.Len(t, cfg.Observability.Providers, 1)
+	assert.Equal(t, "explicit", cfg.Observability.Providers[0].Name)
+	assert.Equal(t, "http://new:9090", cfg.Observability.Providers[0].URL)
+}
+
 func TestNormalizeModeFallsBackToLocalForUnknownValues(t *testing.T) {
 	unsetEnv(t, allConfigEnvKeys()...)
 
