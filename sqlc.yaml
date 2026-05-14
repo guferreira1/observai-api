@@ -5,6 +5,9 @@ sql:
       - migrations/000001_create_analyses_and_chat_messages.up.sql
       - migrations/000002_add_analyses_constraints_and_index.up.sql
       - migrations/000003_create_analysis_jobs.up.sql
+      - migrations/000004_add_analysis_jobs_phase_and_canceled.up.sql
+      - migrations/000005_add_analyses_filter_indexes.up.sql
+      - migrations/000006_create_chat_feedback.up.sql
     queries:
       - internal/adapters/outbound/postgres/query
     gen:

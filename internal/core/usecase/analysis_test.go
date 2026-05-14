@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guferreira1/observai-api/internal/adapters/outbound/fake"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/testfakes"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,14 +17,14 @@ func TestAnalysisAnalyze(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	repository := fake.NewAnalysisRepository()
+	repository := inmemory.NewAnalysisRepository()
 	useCase := NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
 		repository,
-		fake.NewAnalysisContextCache(),
+		inmemory.NewAnalysisContextCache(),
 		6*time.Hour,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	)
 
 	result, err := useCase.Analyze(ctx, domain.AnalysisRequest{
@@ -49,12 +50,12 @@ func TestAnalysisAnalyzeRejectsInvalidRequest(t *testing.T) {
 	t.Parallel()
 
 	useCase := NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
-		fake.NewAnalysisRepository(),
-		fake.NewAnalysisContextCache(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
+		inmemory.NewAnalysisRepository(),
+		inmemory.NewAnalysisContextCache(),
 		6*time.Hour,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	)
 
 	_, err := useCase.Analyze(context.Background(), domain.AnalysisRequest{})
@@ -65,14 +66,14 @@ func TestAnalysisGetReturnsStoredAnalysis(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	repository := fake.NewAnalysisRepository()
+	repository := inmemory.NewAnalysisRepository()
 	useCase := NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
 		repository,
-		fake.NewAnalysisContextCache(),
+		inmemory.NewAnalysisContextCache(),
 		6*time.Hour,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	)
 
 	created, err := useCase.Analyze(ctx, domain.AnalysisRequest{
@@ -95,12 +96,12 @@ func TestAnalysisGetReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
 	useCase := NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
-		fake.NewAnalysisRepository(),
-		fake.NewAnalysisContextCache(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
+		inmemory.NewAnalysisRepository(),
+		inmemory.NewAnalysisContextCache(),
 		6*time.Hour,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	)
 
 	_, err := useCase.Get(context.Background(), "analysis-missing")
@@ -111,7 +112,7 @@ func TestAnalysisListReturnsPaginatedStoredAnalyses(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	repository := fake.NewAnalysisRepository()
+	repository := inmemory.NewAnalysisRepository()
 	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
 		ID:               "analysis-old",
 		Summary:          "old analysis",
@@ -128,12 +129,12 @@ func TestAnalysisListReturnsPaginatedStoredAnalyses(t *testing.T) {
 	}))
 
 	useCase := NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
 		repository,
-		fake.NewAnalysisContextCache(),
+		inmemory.NewAnalysisContextCache(),
 		6*time.Hour,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	)
 
 	result, err := useCase.List(ctx, domain.AnalysisListFilter{
@@ -152,12 +153,12 @@ func TestAnalysisListNormalizesPagination(t *testing.T) {
 	t.Parallel()
 
 	useCase := NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
-		fake.NewAnalysisRepository(),
-		fake.NewAnalysisContextCache(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
+		inmemory.NewAnalysisRepository(),
+		inmemory.NewAnalysisContextCache(),
 		6*time.Hour,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	)
 
 	result, err := useCase.List(context.Background(), domain.AnalysisListFilter{

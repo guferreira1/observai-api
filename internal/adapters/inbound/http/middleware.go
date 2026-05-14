@@ -121,7 +121,7 @@ func writePanicResponse(writer stdhttp.ResponseWriter, requestID string) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set(requestIDHeader, requestID)
 	writer.WriteHeader(stdhttp.StatusInternalServerError)
-	_, _ = writer.Write([]byte(`{"data":{"code":"internal_error","message":"internal server error"},"metadata":{"requestId":"` + requestID + `","provider":{"mode":"local"}}}`))
+	_, _ = writer.Write([]byte(`{"data":{"code":"internal_error","message":"internal server error"},"metadata":{"requestId":"` + requestID + `","processingTimeMs":0,"provider":{"mode":"local"}}}`))
 }
 
 func requestIDFromContext(ctx context.Context) string {
@@ -156,6 +156,15 @@ type statusRecorder struct {
 func (recorder *statusRecorder) WriteHeader(status int) {
 	recorder.status = status
 	recorder.ResponseWriter.WriteHeader(status)
+}
+
+// Flush forwards SSE flushes to the underlying ResponseWriter when it supports
+// http.Flusher. Without this, downstream handlers that perform a Flusher type
+// assertion on the wrapped writer would lose access to the real flusher.
+func (recorder *statusRecorder) Flush() {
+	if flusher, ok := recorder.ResponseWriter.(stdhttp.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func routePattern(request *stdhttp.Request) string {

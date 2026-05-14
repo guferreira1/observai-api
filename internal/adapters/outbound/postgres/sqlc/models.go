@@ -24,6 +24,15 @@ type Analysis struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AnalysisChatFeedback struct {
+	AnalysisID string             `json:"analysis_id"`
+	MessageID  int64              `json:"message_id"`
+	Useful     bool               `json:"useful"`
+	Reason     string             `json:"reason"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AnalysisChatMessage struct {
 	ID         int64              `json:"id"`
 	AnalysisID string             `json:"analysis_id"`
@@ -34,13 +43,16 @@ type AnalysisChatMessage struct {
 }
 
 type AnalysisJob struct {
-	ID           string             `json:"id"`
-	AnalysisID   pgtype.Text        `json:"analysis_id"`
-	Status       string             `json:"status"`
-	Request      []byte             `json:"request"`
-	ErrorMessage string             `json:"error_message"`
-	Attempt      int32              `json:"attempt"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	StartedAt    pgtype.Timestamptz `json:"started_at"`
-	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+	ID              string             `json:"id"`
+	AnalysisID      pgtype.Text        `json:"analysis_id"`
+	Status          string             `json:"status"`
+	Request         []byte             `json:"request"`
+	ErrorMessage    string             `json:"error_message"`
+	Attempt         int32              `json:"attempt"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
+	Phase           string             `json:"phase"`
+	ProgressPercent int32              `json:"progress_percent"`
+	PhaseStartedAt  pgtype.Timestamptz `json:"phase_started_at"`
 }

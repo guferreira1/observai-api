@@ -105,12 +105,46 @@ func toDomainAnalysisResultFromList(row sqlc.ListAnalysesRow) (domain.AnalysisRe
 type analysisFilterParams struct {
 	severity pgtype.Text
 	service  pgtype.Text
+	signal   pgtype.Text
+	provider pgtype.Text
+	fromAt   pgtype.Timestamptz
+	toAt     pgtype.Timestamptz
+	query    pgtype.Text
+	sortBy   string
+	orderAsc bool
+}
+
+type analysisStatsParams struct {
+	severity pgtype.Text
+	service  pgtype.Text
+	fromAt   pgtype.Timestamptz
+	toAt     pgtype.Timestamptz
+}
+
+func toAnalysisStatsParams(filter domain.AnalysisStatsFilter) analysisStatsParams {
+	return analysisStatsParams{
+		severity: optionalText(string(filter.Severity)),
+		service:  optionalText(filter.Service),
+		fromAt:   optionalTimestamp(timeOrNil(filter.From)),
+		toAt:     optionalTimestamp(timeOrNil(filter.To)),
+	}
 }
 
 func toAnalysisFilterParams(filter domain.AnalysisListFilter) analysisFilterParams {
+	sortBy := string(filter.Sort)
+	if sortBy == "" {
+		sortBy = string(domain.SortByCreatedAt)
+	}
 	return analysisFilterParams{
 		severity: optionalText(string(filter.Severity)),
 		service:  optionalText(filter.Service),
+		signal:   optionalText(string(filter.Signal)),
+		provider: optionalText(filter.Provider),
+		fromAt:   optionalTimestamp(timeOrNil(filter.From)),
+		toAt:     optionalTimestamp(timeOrNil(filter.To)),
+		query:    optionalText(filter.Query),
+		sortBy:   sortBy,
+		orderAsc: filter.Order == domain.OrderAsc,
 	}
 }
 

@@ -145,10 +145,11 @@ func TestAnalysisRepositoryIntegrationSaveExchangeAndList(t *testing.T) {
 	analysisID := "test-analysis-repository-chat-history"
 
 	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
-		ID:        analysisID,
-		Summary:   "checkout-service latency increased",
-		Severity:  domain.SeverityHigh,
-		CreatedAt: time.Date(2026, 5, 12, 10, 45, 0, 0, time.UTC),
+		ID:         analysisID,
+		Summary:    "checkout-service latency increased",
+		Severity:   domain.SeverityHigh,
+		Confidence: domain.ConfidenceMedium,
+		CreatedAt:  time.Date(2026, 5, 12, 10, 45, 0, 0, time.UTC),
 	}))
 
 	t.Cleanup(func() {
@@ -167,13 +168,152 @@ func TestAnalysisRepositoryIntegrationSaveExchangeAndList(t *testing.T) {
 		Evidence:   []string{"p95_latency"},
 	}))
 
-	messages, err := repository.List(ctx, analysisID)
+	messages, err := repository.List(ctx, analysisID, domain.ChatHistoryFilter{})
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, domain.ChatRoleUser, messages[0].Role)
 	assert.Equal(t, "Which evidence supports this analysis?", messages[0].Content)
 	assert.Equal(t, domain.ChatRoleAssistant, messages[1].Role)
 	assert.Equal(t, []string{"p95_latency"}, messages[1].Evidence)
+}
+
+func TestAnalysisRepositoryIntegrationListAnalysesWithExtendedFilters(t *testing.T) {
+	t.Parallel()
+
+	repository := newIntegrationRepository(t)
+	ctx := context.Background()
+	prefix := "test-analysis-repo-extfilter-"
+	ids := []string{prefix + "metric", prefix + "log", prefix + "trace"}
+	scopedService := "extfilter-checkout"
+	scopedGateway := "extfilter-payments"
+
+	t.Cleanup(func() {
+		_, err := repository.pool.Exec(context.Background(), "DELETE FROM analyses WHERE id = ANY($1)", ids)
+		require.NoError(t, err)
+	})
+
+	base := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
+		ID:               ids[0],
+		Summary:          "metrics-driven analysis",
+		Severity:         domain.SeverityMedium,
+		Confidence:       domain.ConfidenceMedium,
+		AffectedServices: []string{scopedService},
+		Evidence: []domain.Evidence{
+			{ID: "ev_1", Signal: domain.SignalMetrics, Service: scopedService, Provider: "extfilter-prometheus", Name: "p95"},
+		},
+		CreatedAt: base,
+	}))
+	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
+		ID:               ids[1],
+		Summary:          "log spike investigation",
+		Severity:         domain.SeverityHigh,
+		Confidence:       domain.ConfidenceHigh,
+		AffectedServices: []string{scopedService},
+		Evidence: []domain.Evidence{
+			{ID: "ev_1", Signal: domain.SignalLogs, Service: scopedService, Provider: "extfilter-loki", Name: "5xx_rate"},
+		},
+		CreatedAt: base.Add(time.Hour),
+	}))
+	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
+		ID:               ids[2],
+		Summary:          "trace-only extfilter-payment latency",
+		Severity:         domain.SeverityLow,
+		Confidence:       domain.ConfidenceLow,
+		AffectedServices: []string{scopedGateway},
+		Evidence: []domain.Evidence{
+			{ID: "ev_1", Signal: domain.SignalTraces, Service: scopedGateway, Provider: "extfilter-jaeger", Name: "trace"},
+		},
+		CreatedAt: base.Add(2 * time.Hour),
+	}))
+
+	bySignal, err := repository.ListAnalyses(ctx, domain.AnalysisListFilter{Limit: 10, Service: scopedService, Signal: domain.SignalLogs})
+	require.NoError(t, err)
+	assert.Equal(t, 1, bySignal.Total)
+	require.Len(t, bySignal.Items, 1)
+	assert.Equal(t, ids[1], bySignal.Items[0].ID)
+
+	byProvider, err := repository.ListAnalyses(ctx, domain.AnalysisListFilter{Limit: 10, Provider: "extfilter-jaeger"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, byProvider.Total)
+	assert.Equal(t, ids[2], byProvider.Items[0].ID)
+
+	byQuery, err := repository.ListAnalyses(ctx, domain.AnalysisListFilter{Limit: 10, Query: "extfilter-payment"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, byQuery.Total)
+	assert.Equal(t, ids[2], byQuery.Items[0].ID)
+
+	bySeverityAsc, err := repository.ListAnalyses(ctx, domain.AnalysisListFilter{
+		Limit:   10,
+		Service: scopedService,
+		Sort:    domain.SortBySeverity,
+		Order:   domain.OrderAsc,
+	})
+	require.NoError(t, err)
+	require.Len(t, bySeverityAsc.Items, 2)
+	assert.Equal(t, ids[0], bySeverityAsc.Items[0].ID)
+	assert.Equal(t, ids[1], bySeverityAsc.Items[1].ID)
+
+	byTimeWindow, err := repository.ListAnalyses(ctx, domain.AnalysisListFilter{
+		Limit:   10,
+		Service: scopedService,
+		From:    base.Add(30 * time.Minute),
+		To:      base.Add(90 * time.Minute),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, byTimeWindow.Total)
+	assert.Equal(t, ids[1], byTimeWindow.Items[0].ID)
+}
+
+func TestAnalysisRepositoryIntegrationStatsAndServices(t *testing.T) {
+	t.Parallel()
+
+	repository := newIntegrationRepository(t)
+	ctx := context.Background()
+	prefix := "test-analysis-repo-stats-"
+	ids := []string{prefix + "a", prefix + "b"}
+	scopedService := "stats-checkout"
+	scopedGateway := "stats-payments"
+
+	t.Cleanup(func() {
+		_, err := repository.pool.Exec(context.Background(), "DELETE FROM analyses WHERE id = ANY($1)", ids)
+		require.NoError(t, err)
+	})
+
+	base := time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
+		ID:               ids[0],
+		Summary:          "stats sample a",
+		Severity:         domain.SeverityHigh,
+		Confidence:       domain.ConfidenceHigh,
+		AffectedServices: []string{scopedService, scopedGateway},
+		CreatedAt:        base,
+	}))
+	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
+		ID:               ids[1],
+		Summary:          "stats sample b",
+		Severity:         domain.SeverityMedium,
+		Confidence:       domain.ConfidenceMedium,
+		AffectedServices: []string{scopedService},
+		CreatedAt:        base.Add(time.Hour),
+	}))
+
+	stats, err := repository.AnalysisStats(ctx, domain.AnalysisStatsFilter{
+		Service: scopedService,
+		From:    base.Add(-time.Hour),
+		To:      base.Add(2 * time.Hour),
+	}, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 2, stats.Total)
+	assert.Equal(t, 1, stats.BySeverity[domain.SeverityHigh])
+	assert.Equal(t, 1, stats.BySeverity[domain.SeverityMedium])
+	assert.Equal(t, 1, stats.ByConfidence[domain.ConfidenceHigh])
+	assert.NotEmpty(t, stats.TopAffectedServices)
+	assert.NotEmpty(t, stats.TrendBuckets)
+
+	services, err := repository.ListAffectedServices(ctx, "stats-check", 10)
+	require.NoError(t, err)
+	assert.Contains(t, services, scopedService)
 }
 
 func newIntegrationRepository(t *testing.T) *AnalysisRepository {

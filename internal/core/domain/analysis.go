@@ -23,6 +23,12 @@ var ErrQuestionOutOfScope = errors.New("question out of analysis scope")
 // ErrAnalysisContextNotFound indicates that cached analysis context is unavailable.
 var ErrAnalysisContextNotFound = errors.New("analysis context not found")
 
+// ErrProviderNotConfigured indicates that an outbound provider adapter has no
+// real backend wired and cannot serve requests. Returned by null adapters in
+// place of synthetic data when the operator runs the API in local/dev mode
+// without configuring the corresponding observability or LLM provider.
+var ErrProviderNotConfigured = errors.New("provider not configured")
+
 // Severity describes the operational impact detected by an analysis.
 type Severity string
 
@@ -92,6 +98,42 @@ const (
 	SignalAPM SignalType = "apm"
 )
 
+var signalSet = map[SignalType]struct{}{
+	SignalLogs:    {},
+	SignalMetrics: {},
+	SignalTraces:  {},
+	SignalAPM:     {},
+}
+
+// IsValidSignal reports whether signal is part of the public signal taxonomy.
+func IsValidSignal(signal SignalType) bool {
+	_, ok := signalSet[signal]
+	return ok
+}
+
+var analysisListSortSet = map[AnalysisListSort]struct{}{
+	SortByCreatedAt:  {},
+	SortBySeverity:   {},
+	SortByConfidence: {},
+}
+
+// IsValidAnalysisListSort reports whether sort is a supported ordering column.
+func IsValidAnalysisListSort(sort AnalysisListSort) bool {
+	_, ok := analysisListSortSet[sort]
+	return ok
+}
+
+var analysisListOrderSet = map[AnalysisListOrder]struct{}{
+	OrderAsc:  {},
+	OrderDesc: {},
+}
+
+// IsValidAnalysisListOrder reports whether order is a supported ordering direction.
+func IsValidAnalysisListOrder(order AnalysisListOrder) bool {
+	_, ok := analysisListOrderSet[order]
+	return ok
+}
+
 // TimeWindow defines the time range used to collect evidence.
 type TimeWindow struct {
 	Start time.Time
@@ -111,7 +153,13 @@ type AnalysisRequest struct {
 //
 // Fields are provider-agnostic: adapters must translate any provider-specific
 // payload into these fields before returning evidence to the use case.
+//
+// ID is assigned by the analysis use case after evidence collection and is
+// stable within the scope of a single analysis. It is the value clients use
+// to cite evidence in chat answers and to link root-cause hypotheses to
+// supporting observations.
 type Evidence struct {
+	ID         string
 	Signal     SignalType
 	Service    string
 	Source     string
@@ -156,12 +204,41 @@ type AnalysisResult struct {
 	CreatedAt          time.Time
 }
 
+// AnalysisListSort identifies which column the list endpoint orders by.
+type AnalysisListSort string
+
+const (
+	// SortByCreatedAt orders by analysis creation time. Default.
+	SortByCreatedAt AnalysisListSort = "createdAt"
+	// SortBySeverity orders by severity rank.
+	SortBySeverity AnalysisListSort = "severity"
+	// SortByConfidence orders by confidence rank.
+	SortByConfidence AnalysisListSort = "confidence"
+)
+
+// AnalysisListOrder identifies the direction of the list ordering.
+type AnalysisListOrder string
+
+const (
+	// OrderAsc sorts in ascending order.
+	OrderAsc AnalysisListOrder = "asc"
+	// OrderDesc sorts in descending order. Default for createdAt and severity.
+	OrderDesc AnalysisListOrder = "desc"
+)
+
 // AnalysisListFilter describes provider-agnostic analysis list filters.
 type AnalysisListFilter struct {
 	Limit    int
 	Offset   int
 	Severity Severity
 	Service  string
+	Signal   SignalType
+	Provider string
+	From     time.Time
+	To       time.Time
+	Query    string
+	Sort     AnalysisListSort
+	Order    AnalysisListOrder
 }
 
 // AnalysisList describes a paginated list of stored analyses.
@@ -170,6 +247,41 @@ type AnalysisList struct {
 	Limit  int
 	Offset int
 	Total  int
+}
+
+// AnalysisStatsFilter describes the optional bounds applied to aggregated stats.
+type AnalysisStatsFilter struct {
+	From     time.Time
+	To       time.Time
+	Service  string
+	Severity Severity
+}
+
+// AnalysisStats describes aggregated analysis counts for the requested filter.
+//
+// All counts include analyses that match the filter. Distributions are
+// returned as full maps with zero entries omitted so the frontend can render
+// stable charts without re-deriving keys.
+type AnalysisStats struct {
+	Total               int
+	BySeverity          map[Severity]int
+	ByConfidence        map[Confidence]int
+	TopAffectedServices []AnalysisStatsServiceCount
+	TrendBuckets        []AnalysisStatsTrendBucket
+	From                time.Time
+	To                  time.Time
+}
+
+// AnalysisStatsServiceCount describes how many analyses mention a given service.
+type AnalysisStatsServiceCount struct {
+	Service string
+	Count   int
+}
+
+// AnalysisStatsTrendBucket describes the count of analyses inside a time bucket.
+type AnalysisStatsTrendBucket struct {
+	BucketStart time.Time
+	Count       int
 }
 
 // AnalysisContext describes the compact analysis state used for scoped follow-up chat.
@@ -199,6 +311,44 @@ type ChatAnswer struct {
 	AnalysisID string
 	Answer     string
 	Evidence   []string
+	Citations  []ChatCitation
+}
+
+// ChatCitation references evidence that supports a scoped chat answer.
+//
+// EvidenceID matches the stable Evidence.ID inside the parent analysis.
+// Snippet is an optional human-readable preview the frontend can render
+// next to the citation without re-fetching the evidence list.
+type ChatCitation struct {
+	EvidenceID string
+	Snippet    string
+}
+
+// ChatFeedback describes user feedback for a persisted chat message.
+//
+// Useful captures the binary thumbs-up/thumbs-down signal; Reason is an
+// optional free-form note. AnalysisID and MessageID identify the message the
+// feedback applies to. Authoritative feedback must be persisted via a
+// repository implementation so it can feed quality dashboards.
+type ChatFeedback struct {
+	AnalysisID string
+	MessageID  string
+	Useful     bool
+	Reason     string
+	CreatedAt  time.Time
+}
+
+// ErrChatMessageNotFound indicates that the supplied chat message does not exist.
+var ErrChatMessageNotFound = errors.New("chat message not found")
+
+// ChatHistoryFilter describes pagination options for chat history retrieval.
+//
+// Before is exclusive: only messages strictly older than the cursor are
+// returned. A zero Before means "start from the most recent message".
+// Limit zero or negative falls back to a reasonable default in the use case.
+type ChatHistoryFilter struct {
+	Before time.Time
+	Limit  int
 }
 
 // ChatRole identifies who produced a persistent chat message.
@@ -218,6 +368,7 @@ type ChatMessage struct {
 	Role       ChatRole
 	Content    string
 	Evidence   []string
+	Citations  []ChatCitation
 	CreatedAt  time.Time
 }
 

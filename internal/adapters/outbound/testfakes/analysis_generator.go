@@ -1,4 +1,4 @@
-package fake
+package testfakes
 
 import (
 	"context"
@@ -6,10 +6,10 @@ import (
 	"github.com/guferreira1/observai-api/internal/core/domain"
 )
 
-// AnalysisGenerator produces deterministic analysis results for local execution and tests.
+// AnalysisGenerator produces deterministic analysis results for tests.
 type AnalysisGenerator struct{}
 
-// NewAnalysisGenerator creates a fake analysis generator.
+// NewAnalysisGenerator creates a deterministic analysis generator for tests.
 func NewAnalysisGenerator() *AnalysisGenerator {
 	return &AnalysisGenerator{}
 }
@@ -46,7 +46,7 @@ func (generator *AnalysisGenerator) Generate(_ context.Context, request domain.A
 		RecommendedActions: []domain.Recommendation{
 			{
 				Action:    "connect a read-only observability adapter and rerun the analysis",
-				Rationale: "fake evidence proves the flow but does not represent production telemetry",
+				Rationale: "deterministic test evidence proves the flow but does not represent production telemetry",
 				Priority:  1,
 			},
 		},
@@ -64,6 +64,5 @@ func evidenceNames(evidence []domain.Evidence) []string {
 	for _, item := range evidence {
 		names = append(names, item.Name)
 	}
-
 	return names
 }

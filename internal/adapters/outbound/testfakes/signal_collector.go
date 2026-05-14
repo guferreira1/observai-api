@@ -1,4 +1,4 @@
-package fake
+package testfakes
 
 import (
 	"context"
@@ -7,10 +7,10 @@ import (
 	"github.com/guferreira1/observai-api/internal/core/domain"
 )
 
-// SignalCollector returns normalized deterministic evidence for local execution and tests.
+// SignalCollector returns deterministic evidence for tests.
 type SignalCollector struct{}
 
-// NewSignalCollector creates a fake signal collector.
+// NewSignalCollector creates a deterministic signal collector for tests.
 func NewSignalCollector() *SignalCollector {
 	return &SignalCollector{}
 }
@@ -42,7 +42,7 @@ func (collector *SignalCollector) Collect(_ context.Context, request domain.Anal
 		evidence = append(evidence, domain.Evidence{
 			Signal:   signal,
 			Service:  service,
-			Source:   "fake",
+			Source:   "testfake",
 			Name:     string(signal) + "_summary",
 			Summary:  "deterministic " + string(signal) + " evidence for " + request.Goal,
 			Observed: observed,

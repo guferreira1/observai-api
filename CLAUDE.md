@@ -118,3 +118,35 @@ Agents must read this file and the files under `.claude/` before making changes.
 ## Definition of done
 
 A task is complete only when the change respects hexagonal architecture, keeps the core free from infrastructure dependencies, updates tests when behavior changes, includes GoDocs for exported elements, avoids confidential values, respects the git safety rules and updates `.claude/memory.md`.
+
+## Local working instructions
+
+The following files under `.claude/` are loaded automatically and form the complete agent workspace context.
+
+### Workspace overview
+
+@.claude/README.md
+
+### Specialist agent profiles
+
+@.claude/agents/software-architect.md
+@.claude/agents/go-specialist.md
+@.claude/agents/sre.md
+@.claude/agents/performance-engineer.md
+@.claude/agents/observability-analyst.md
+@.claude/agents/security-engineer.md
+@.claude/agents/qa-engineer.md
+
+### Reusable skills
+
+@.claude/skills/hexagonal-feature.md
+@.claude/skills/provider-adapter.md
+
+### Session hooks
+
+@.claude/hooks/session-start.md
+@.claude/hooks/session-end.md
+
+### Task template
+
+@.claude/tasks/task-template.md

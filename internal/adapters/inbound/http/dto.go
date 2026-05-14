@@ -32,6 +32,7 @@ type ProviderSummary struct {
 type Pagination struct {
 	Limit  int    `json:"limit"`
 	Offset int    `json:"offset"`
+	Total  int    `json:"total"`
 	Next   string `json:"next,omitempty"`
 }
 
@@ -52,6 +53,38 @@ type ErrorFieldDetail struct {
 // HealthResponse describes service health.
 type HealthResponse struct {
 	Status string `json:"status"`
+}
+
+// CapabilitiesResponse describes non-sensitive runtime capabilities exposed to clients.
+//
+// Clients use this payload to render the runtime panel, gate features that depend on
+// optional providers and decide which signals or LLM features are available.
+type CapabilitiesResponse struct {
+	Mode          string               `json:"mode"`
+	Version       string               `json:"version,omitempty"`
+	LLM           CapabilityLLM        `json:"llm"`
+	Observability []CapabilityProvider `json:"observability"`
+	Limits        CapabilityLimits     `json:"limits"`
+}
+
+// CapabilityLLM describes the active LLM adapter without leaking secrets.
+type CapabilityLLM struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model,omitempty"`
+}
+
+// CapabilityProvider describes an active observability adapter and the signals it supports.
+type CapabilityProvider struct {
+	Provider string   `json:"provider"`
+	Signals  []string `json:"signals"`
+}
+
+// CapabilityLimits exposes runtime guards that affect client request shape.
+type CapabilityLimits struct {
+	HTTPRequestTimeoutMs int64   `json:"httpRequestTimeoutMs"`
+	HTTPMaxBodyBytes     int64   `json:"httpMaxBodyBytes"`
+	RateLimitRPS         float64 `json:"rateLimitRps,omitempty"`
+	RateLimitBurst       int     `json:"rateLimitBurst,omitempty"`
 }
 
 // AnalysisRequestDto describes a provider-agnostic analysis request.
@@ -90,8 +123,37 @@ type AnalysisListResponseDto struct {
 	Items []AnalysisResponseDto `json:"items"`
 }
 
+// ServicesResponseDto lists services derived from stored analyses for autocomplete.
+type ServicesResponseDto struct {
+	Items []string `json:"items"`
+}
+
+// AnalysisStatsResponseDto describes aggregated counts for a stats request.
+type AnalysisStatsResponseDto struct {
+	Total               int                       `json:"total"`
+	BySeverity          map[string]int            `json:"bySeverity"`
+	ByConfidence        map[string]int            `json:"byConfidence"`
+	TopAffectedServices []AnalysisStatsServiceDto `json:"topAffectedServices"`
+	TrendBuckets        []AnalysisStatsTrendDto   `json:"trendBuckets"`
+	From                *time.Time                `json:"from,omitempty"`
+	To                  *time.Time                `json:"to,omitempty"`
+}
+
+// AnalysisStatsServiceDto describes a single (service, count) row.
+type AnalysisStatsServiceDto struct {
+	Service string `json:"service"`
+	Count   int    `json:"count"`
+}
+
+// AnalysisStatsTrendDto describes a single (bucketStart, count) row.
+type AnalysisStatsTrendDto struct {
+	BucketStart time.Time `json:"bucketStart"`
+	Count       int       `json:"count"`
+}
+
 // EvidenceDto describes normalized evidence returned to API clients.
 type EvidenceDto struct {
+	ID         string            `json:"id"`
 	Signal     string            `json:"signal"`
 	Service    string            `json:"service"`
 	Source     string            `json:"source"`
@@ -129,15 +191,48 @@ type AnalysisJobAcceptedDto struct {
 
 // AnalysisJobStatusDto describes the lifecycle state of an asynchronous analysis job.
 type AnalysisJobStatusDto struct {
-	JobID        string     `json:"jobId"`
-	Status       string     `json:"status"`
-	AnalysisID   string     `json:"analysisId,omitempty"`
-	AnalysisURL  string     `json:"analysisUrl,omitempty"`
-	ErrorMessage string     `json:"errorMessage,omitempty"`
-	Attempt      int        `json:"attempt"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	StartedAt    *time.Time `json:"startedAt,omitempty"`
-	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	JobID           string     `json:"jobId"`
+	Status          string     `json:"status"`
+	Phase           string     `json:"phase"`
+	ProgressPercent int        `json:"progressPercent"`
+	AnalysisID      string     `json:"analysisId,omitempty"`
+	AnalysisURL     string     `json:"analysisUrl,omitempty"`
+	ErrorMessage    string     `json:"errorMessage,omitempty"`
+	Attempt         int        `json:"attempt"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	StartedAt       *time.Time `json:"startedAt,omitempty"`
+	PhaseStartedAt  *time.Time `json:"phaseStartedAt,omitempty"`
+	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
+}
+
+// TraceInsightsResponseDto describes structured trace spans and derived insights.
+type TraceInsightsResponseDto struct {
+	Spans               []SpanDto                `json:"spans"`
+	CriticalPathSpanIDs []string                 `json:"criticalPathSpanIds"`
+	SlowestSpanIDs      []string                 `json:"slowestSpanIds"`
+	DependencyEdges     []TraceDependencyEdgeDto `json:"dependencyEdges"`
+}
+
+// SpanDto describes a single normalized span returned to API clients.
+type SpanDto struct {
+	TraceID      string            `json:"traceId"`
+	SpanID       string            `json:"spanId"`
+	ParentSpanID string            `json:"parentSpanId,omitempty"`
+	Service      string            `json:"service"`
+	Operation    string            `json:"operation"`
+	StartTime    time.Time         `json:"startTime"`
+	DurationMs   float64           `json:"durationMs"`
+	SelfTimeMs   float64           `json:"selfTimeMs"`
+	Status       string            `json:"status"`
+	Attributes   map[string]string `json:"attributes,omitempty"`
+}
+
+// TraceDependencyEdgeDto describes an aggregated service dependency.
+type TraceDependencyEdgeDto struct {
+	From      string  `json:"from"`
+	To        string  `json:"to"`
+	CallCount int     `json:"callCount"`
+	P95Ms     float64 `json:"p95Ms"`
 }
 
 // ChatRequestDto describes a chat question for an active analysis.
@@ -147,9 +242,31 @@ type ChatRequestDto struct {
 
 // ChatResponseDto describes a scoped chat answer.
 type ChatResponseDto struct {
-	AnalysisID string   `json:"analysisId"`
-	Answer     string   `json:"answer"`
-	Evidence   []string `json:"evidence"`
+	AnalysisID string            `json:"analysisId"`
+	Answer     string            `json:"answer"`
+	Evidence   []string          `json:"evidence"`
+	Citations  []ChatCitationDto `json:"citations,omitempty"`
+}
+
+// ChatCitationDto describes a single citation tying an answer fragment to evidence.
+type ChatCitationDto struct {
+	EvidenceID string `json:"evidenceId"`
+	Snippet    string `json:"snippet,omitempty"`
+}
+
+// ChatFeedbackRequestDto describes user feedback for a previously delivered assistant message.
+type ChatFeedbackRequestDto struct {
+	Useful *bool  `json:"useful" validate:"required"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// ChatFeedbackResponseDto echoes the persisted feedback.
+type ChatFeedbackResponseDto struct {
+	AnalysisID string    `json:"analysisId"`
+	MessageID  string    `json:"messageId"`
+	Useful     bool      `json:"useful"`
+	Reason     string    `json:"reason,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 // ChatHistoryResponseDto describes persisted chat history for an analysis.
@@ -159,12 +276,13 @@ type ChatHistoryResponseDto struct {
 
 // ChatMessageDto describes a persisted chat message returned to API clients.
 type ChatMessageDto struct {
-	ID         string    `json:"id"`
-	AnalysisID string    `json:"analysisId"`
-	Role       string    `json:"role"`
-	Content    string    `json:"content"`
-	Evidence   []string  `json:"evidence,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID         string            `json:"id"`
+	AnalysisID string            `json:"analysisId"`
+	Role       string            `json:"role"`
+	Content    string            `json:"content"`
+	Evidence   []string          `json:"evidence,omitempty"`
+	Citations  []ChatCitationDto `json:"citations,omitempty"`
+	CreatedAt  time.Time         `json:"createdAt"`
 }
 
 func toDomainAnalysisRequest(dto AnalysisRequestDto) domain.AnalysisRequest {
@@ -189,6 +307,7 @@ func toAnalysisResponseDto(result domain.AnalysisResult) AnalysisResponseDto {
 	evidence := make([]EvidenceDto, 0, len(result.Evidence))
 	for _, item := range result.Evidence {
 		evidence = append(evidence, EvidenceDto{
+			ID:         item.ID,
 			Signal:     string(item.Signal),
 			Service:    item.Service,
 			Source:     item.Source,
@@ -238,6 +357,48 @@ func toAnalysisResponseDto(result domain.AnalysisResult) AnalysisResponseDto {
 	}
 }
 
+func toAnalysisStatsResponseDto(stats domain.AnalysisStats) AnalysisStatsResponseDto {
+	bySeverity := make(map[string]int, len(stats.BySeverity))
+	for severity, count := range stats.BySeverity {
+		bySeverity[string(severity)] = count
+	}
+
+	byConfidence := make(map[string]int, len(stats.ByConfidence))
+	for confidence, count := range stats.ByConfidence {
+		byConfidence[string(confidence)] = count
+	}
+
+	services := make([]AnalysisStatsServiceDto, 0, len(stats.TopAffectedServices))
+	for _, item := range stats.TopAffectedServices {
+		services = append(services, AnalysisStatsServiceDto{Service: item.Service, Count: item.Count})
+	}
+
+	buckets := make([]AnalysisStatsTrendDto, 0, len(stats.TrendBuckets))
+	for _, bucket := range stats.TrendBuckets {
+		buckets = append(buckets, AnalysisStatsTrendDto{
+			BucketStart: bucket.BucketStart,
+			Count:       bucket.Count,
+		})
+	}
+
+	dto := AnalysisStatsResponseDto{
+		Total:               stats.Total,
+		BySeverity:          bySeverity,
+		ByConfidence:        byConfidence,
+		TopAffectedServices: services,
+		TrendBuckets:        buckets,
+	}
+	if !stats.From.IsZero() {
+		from := stats.From
+		dto.From = &from
+	}
+	if !stats.To.IsZero() {
+		to := stats.To
+		dto.To = &to
+	}
+	return dto
+}
+
 func toAnalysisListResponseDto(result domain.AnalysisList) AnalysisListResponseDto {
 	items := make([]AnalysisResponseDto, 0, len(result.Items))
 	for _, item := range result.Items {
@@ -256,15 +417,22 @@ func toAnalysisJobAcceptedDto(job domain.AnalysisJob) AnalysisJobAcceptedDto {
 }
 
 func toAnalysisJobStatusDto(job domain.AnalysisJob) AnalysisJobStatusDto {
+	phase := string(job.Phase)
+	if phase == "" {
+		phase = string(domain.PhaseQueued)
+	}
 	dto := AnalysisJobStatusDto{
-		JobID:        job.ID,
-		Status:       string(job.Status),
-		AnalysisID:   job.AnalysisID,
-		ErrorMessage: job.ErrorMessage,
-		Attempt:      job.Attempt,
-		CreatedAt:    job.CreatedAt,
-		StartedAt:    job.StartedAt,
-		FinishedAt:   job.FinishedAt,
+		JobID:           job.ID,
+		Status:          string(job.Status),
+		Phase:           phase,
+		ProgressPercent: job.ProgressPercent,
+		AnalysisID:      job.AnalysisID,
+		ErrorMessage:    job.ErrorMessage,
+		Attempt:         job.Attempt,
+		CreatedAt:       job.CreatedAt,
+		StartedAt:       job.StartedAt,
+		PhaseStartedAt:  job.PhaseStartedAt,
+		FinishedAt:      job.FinishedAt,
 	}
 	if job.AnalysisID != "" {
 		dto.AnalysisURL = "/v1/analyses/" + job.AnalysisID
@@ -272,12 +440,69 @@ func toAnalysisJobStatusDto(job domain.AnalysisJob) AnalysisJobStatusDto {
 	return dto
 }
 
+func toTraceInsightsResponseDto(insights domain.TraceInsights) TraceInsightsResponseDto {
+	spans := make([]SpanDto, 0, len(insights.Spans))
+	for _, span := range insights.Spans {
+		spans = append(spans, SpanDto{
+			TraceID:      span.TraceID,
+			SpanID:       span.SpanID,
+			ParentSpanID: span.ParentSpanID,
+			Service:      span.Service,
+			Operation:    span.Operation,
+			StartTime:    span.StartTime,
+			DurationMs:   span.DurationMs,
+			SelfTimeMs:   span.SelfTimeMs,
+			Status:       string(span.Status),
+			Attributes:   span.Attributes,
+		})
+	}
+
+	edges := make([]TraceDependencyEdgeDto, 0, len(insights.DependencyEdges))
+	for _, edge := range insights.DependencyEdges {
+		edges = append(edges, TraceDependencyEdgeDto{
+			From:      edge.From,
+			To:        edge.To,
+			CallCount: edge.CallCount,
+			P95Ms:     edge.P95Ms,
+		})
+	}
+
+	return TraceInsightsResponseDto{
+		Spans:               spans,
+		CriticalPathSpanIDs: ensureStringSlice(insights.CriticalPathSpanIDs),
+		SlowestSpanIDs:      ensureStringSlice(insights.SlowestSpanIDs),
+		DependencyEdges:     edges,
+	}
+}
+
+func ensureStringSlice(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
 func toChatResponseDto(answer domain.ChatAnswer) ChatResponseDto {
 	return ChatResponseDto{
 		AnalysisID: answer.AnalysisID,
 		Answer:     answer.Answer,
 		Evidence:   answer.Evidence,
+		Citations:  toChatCitationDtos(answer.Citations),
 	}
+}
+
+func toChatCitationDtos(citations []domain.ChatCitation) []ChatCitationDto {
+	if len(citations) == 0 {
+		return nil
+	}
+	dtos := make([]ChatCitationDto, 0, len(citations))
+	for _, citation := range citations {
+		dtos = append(dtos, ChatCitationDto{
+			EvidenceID: citation.EvidenceID,
+			Snippet:    citation.Snippet,
+		})
+	}
+	return dtos
 }
 
 func toChatHistoryResponseDto(messages []domain.ChatMessage) ChatHistoryResponseDto {
@@ -289,6 +514,7 @@ func toChatHistoryResponseDto(messages []domain.ChatMessage) ChatHistoryResponse
 			Role:       string(message.Role),
 			Content:    message.Content,
 			Evidence:   message.Evidence,
+			Citations:  toChatCitationDtos(message.Citations),
 			CreatedAt:  message.CreatedAt,
 		})
 	}

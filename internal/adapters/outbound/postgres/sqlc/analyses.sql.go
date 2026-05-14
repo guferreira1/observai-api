@@ -11,20 +11,253 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const analysesConfidenceHistogram = `-- name: AnalysesConfidenceHistogram :many
+SELECT
+    confidence,
+    count(*)::int AS total
+FROM analyses
+WHERE ($1::text IS NULL OR severity = $1::text)
+  AND ($2::text IS NULL OR $2::text = ANY(affected_services))
+  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR created_at <= $4::timestamptz)
+GROUP BY confidence
+`
+
+type AnalysesConfidenceHistogramParams struct {
+	Severity pgtype.Text        `json:"severity"`
+	Service  pgtype.Text        `json:"service"`
+	FromAt   pgtype.Timestamptz `json:"from_at"`
+	ToAt     pgtype.Timestamptz `json:"to_at"`
+}
+
+type AnalysesConfidenceHistogramRow struct {
+	Confidence string `json:"confidence"`
+	Total      int32  `json:"total"`
+}
+
+func (q *Queries) AnalysesConfidenceHistogram(ctx context.Context, arg AnalysesConfidenceHistogramParams) ([]AnalysesConfidenceHistogramRow, error) {
+	rows, err := q.db.Query(ctx, analysesConfidenceHistogram,
+		arg.Severity,
+		arg.Service,
+		arg.FromAt,
+		arg.ToAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AnalysesConfidenceHistogramRow{}
+	for rows.Next() {
+		var i AnalysesConfidenceHistogramRow
+		if err := rows.Scan(&i.Confidence, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const analysesSeverityHistogram = `-- name: AnalysesSeverityHistogram :many
+SELECT
+    severity,
+    count(*)::int AS total
+FROM analyses
+WHERE ($1::text IS NULL OR severity = $1::text)
+  AND ($2::text IS NULL OR $2::text = ANY(affected_services))
+  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR created_at <= $4::timestamptz)
+GROUP BY severity
+`
+
+type AnalysesSeverityHistogramParams struct {
+	Severity pgtype.Text        `json:"severity"`
+	Service  pgtype.Text        `json:"service"`
+	FromAt   pgtype.Timestamptz `json:"from_at"`
+	ToAt     pgtype.Timestamptz `json:"to_at"`
+}
+
+type AnalysesSeverityHistogramRow struct {
+	Severity string `json:"severity"`
+	Total    int32  `json:"total"`
+}
+
+func (q *Queries) AnalysesSeverityHistogram(ctx context.Context, arg AnalysesSeverityHistogramParams) ([]AnalysesSeverityHistogramRow, error) {
+	rows, err := q.db.Query(ctx, analysesSeverityHistogram,
+		arg.Severity,
+		arg.Service,
+		arg.FromAt,
+		arg.ToAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AnalysesSeverityHistogramRow{}
+	for rows.Next() {
+		var i AnalysesSeverityHistogramRow
+		if err := rows.Scan(&i.Severity, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const analysesTopServices = `-- name: AnalysesTopServices :many
+SELECT
+    service::text AS service,
+    count(*)::int AS total
+FROM analyses, unnest(affected_services) AS service
+WHERE ($1::text IS NULL OR severity = $1::text)
+  AND ($2::text IS NULL OR $2::text = ANY(affected_services))
+  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR created_at <= $4::timestamptz)
+  AND service <> ''
+  AND ($5::text IS NULL OR service ILIKE '%' || $5::text || '%')
+GROUP BY service
+ORDER BY total DESC, service ASC
+LIMIT $6
+`
+
+type AnalysesTopServicesParams struct {
+	Severity      pgtype.Text        `json:"severity"`
+	ServiceFilter pgtype.Text        `json:"service_filter"`
+	FromAt        pgtype.Timestamptz `json:"from_at"`
+	ToAt          pgtype.Timestamptz `json:"to_at"`
+	Q             pgtype.Text        `json:"q"`
+	ResultLimit   int32              `json:"result_limit"`
+}
+
+type AnalysesTopServicesRow struct {
+	Service string `json:"service"`
+	Total   int32  `json:"total"`
+}
+
+func (q *Queries) AnalysesTopServices(ctx context.Context, arg AnalysesTopServicesParams) ([]AnalysesTopServicesRow, error) {
+	rows, err := q.db.Query(ctx, analysesTopServices,
+		arg.Severity,
+		arg.ServiceFilter,
+		arg.FromAt,
+		arg.ToAt,
+		arg.Q,
+		arg.ResultLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AnalysesTopServicesRow{}
+	for rows.Next() {
+		var i AnalysesTopServicesRow
+		if err := rows.Scan(&i.Service, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const analysesTrendBuckets = `-- name: AnalysesTrendBuckets :many
+SELECT
+    date_trunc('day', created_at)::timestamptz AS bucket_start,
+    count(*)::int AS total
+FROM analyses
+WHERE ($1::text IS NULL OR severity = $1::text)
+  AND ($2::text IS NULL OR $2::text = ANY(affected_services))
+  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR created_at <= $4::timestamptz)
+GROUP BY bucket_start
+ORDER BY bucket_start ASC
+`
+
+type AnalysesTrendBucketsParams struct {
+	Severity pgtype.Text        `json:"severity"`
+	Service  pgtype.Text        `json:"service"`
+	FromAt   pgtype.Timestamptz `json:"from_at"`
+	ToAt     pgtype.Timestamptz `json:"to_at"`
+}
+
+type AnalysesTrendBucketsRow struct {
+	BucketStart pgtype.Timestamptz `json:"bucket_start"`
+	Total       int32              `json:"total"`
+}
+
+func (q *Queries) AnalysesTrendBuckets(ctx context.Context, arg AnalysesTrendBucketsParams) ([]AnalysesTrendBucketsRow, error) {
+	rows, err := q.db.Query(ctx, analysesTrendBuckets,
+		arg.Severity,
+		arg.Service,
+		arg.FromAt,
+		arg.ToAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AnalysesTrendBucketsRow{}
+	for rows.Next() {
+		var i AnalysesTrendBucketsRow
+		if err := rows.Scan(&i.BucketStart, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countAnalyses = `-- name: CountAnalyses :one
 SELECT count(*)::int
 FROM analyses
 WHERE ($1::text IS NULL OR severity = $1::text)
   AND ($2::text IS NULL OR $2::text = ANY(affected_services))
+  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR created_at <= $4::timestamptz)
+  AND (
+        $5::text IS NULL
+        OR summary ILIKE '%' || $5::text || '%'
+        OR id ILIKE '%' || $5::text || '%'
+      )
+  AND (
+        $6::text IS NULL
+        OR evidence @> jsonb_build_array(jsonb_build_object('Signal', $6::text))
+      )
+  AND (
+        $7::text IS NULL
+        OR evidence @> jsonb_build_array(jsonb_build_object('Provider', $7::text))
+      )
 `
 
 type CountAnalysesParams struct {
-	Severity pgtype.Text `json:"severity"`
-	Service  pgtype.Text `json:"service"`
+	Severity pgtype.Text        `json:"severity"`
+	Service  pgtype.Text        `json:"service"`
+	FromAt   pgtype.Timestamptz `json:"from_at"`
+	ToAt     pgtype.Timestamptz `json:"to_at"`
+	Q        pgtype.Text        `json:"q"`
+	Signal   pgtype.Text        `json:"signal"`
+	Provider pgtype.Text        `json:"provider"`
 }
 
 func (q *Queries) CountAnalyses(ctx context.Context, arg CountAnalysesParams) (int32, error) {
-	row := q.db.QueryRow(ctx, countAnalyses, arg.Severity, arg.Service)
+	row := q.db.QueryRow(ctx, countAnalyses,
+		arg.Severity,
+		arg.Service,
+		arg.FromAt,
+		arg.ToAt,
+		arg.Q,
+		arg.Signal,
+		arg.Provider,
+	)
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -100,16 +333,77 @@ SELECT
 FROM analyses
 WHERE ($1::text IS NULL OR severity = $1::text)
   AND ($2::text IS NULL OR $2::text = ANY(affected_services))
-ORDER BY created_at DESC, id ASC
-LIMIT $4
-OFFSET $3
+  AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+  AND ($4::timestamptz IS NULL OR created_at <= $4::timestamptz)
+  AND (
+        $5::text IS NULL
+        OR summary ILIKE '%' || $5::text || '%'
+        OR id ILIKE '%' || $5::text || '%'
+      )
+  AND (
+        $6::text IS NULL
+        OR evidence @> jsonb_build_array(jsonb_build_object('Signal', $6::text))
+      )
+  AND (
+        $7::text IS NULL
+        OR evidence @> jsonb_build_array(jsonb_build_object('Provider', $7::text))
+      )
+ORDER BY
+    CASE WHEN $8::text = 'severity' AND $9::bool THEN
+        CASE severity
+            WHEN 'info' THEN 0
+            WHEN 'low' THEN 1
+            WHEN 'medium' THEN 2
+            WHEN 'high' THEN 3
+            WHEN 'critical' THEN 4
+            ELSE 0
+        END
+    END ASC NULLS LAST,
+    CASE WHEN $8::text = 'severity' AND NOT $9::bool THEN
+        CASE severity
+            WHEN 'info' THEN 0
+            WHEN 'low' THEN 1
+            WHEN 'medium' THEN 2
+            WHEN 'high' THEN 3
+            WHEN 'critical' THEN 4
+            ELSE 0
+        END
+    END DESC NULLS LAST,
+    CASE WHEN $8::text = 'confidence' AND $9::bool THEN
+        CASE confidence
+            WHEN 'low' THEN 1
+            WHEN 'medium' THEN 2
+            WHEN 'high' THEN 3
+            ELSE 0
+        END
+    END ASC NULLS LAST,
+    CASE WHEN $8::text = 'confidence' AND NOT $9::bool THEN
+        CASE confidence
+            WHEN 'low' THEN 1
+            WHEN 'medium' THEN 2
+            WHEN 'high' THEN 3
+            ELSE 0
+        END
+    END DESC NULLS LAST,
+    CASE WHEN $8::text = 'createdAt' AND $9::bool THEN created_at END ASC NULLS LAST,
+    CASE WHEN $8::text = 'createdAt' AND NOT $9::bool THEN created_at END DESC NULLS LAST,
+    id ASC
+LIMIT $11
+OFFSET $10
 `
 
 type ListAnalysesParams struct {
-	Severity     pgtype.Text `json:"severity"`
-	Service      pgtype.Text `json:"service"`
-	ResultOffset int32       `json:"result_offset"`
-	ResultLimit  int32       `json:"result_limit"`
+	Severity     pgtype.Text        `json:"severity"`
+	Service      pgtype.Text        `json:"service"`
+	FromAt       pgtype.Timestamptz `json:"from_at"`
+	ToAt         pgtype.Timestamptz `json:"to_at"`
+	Q            pgtype.Text        `json:"q"`
+	Signal       pgtype.Text        `json:"signal"`
+	Provider     pgtype.Text        `json:"provider"`
+	SortBy       string             `json:"sort_by"`
+	OrderAsc     bool               `json:"order_asc"`
+	ResultOffset int32              `json:"result_offset"`
+	ResultLimit  int32              `json:"result_limit"`
 }
 
 type ListAnalysesRow struct {
@@ -131,6 +425,13 @@ func (q *Queries) ListAnalyses(ctx context.Context, arg ListAnalysesParams) ([]L
 	rows, err := q.db.Query(ctx, listAnalyses,
 		arg.Severity,
 		arg.Service,
+		arg.FromAt,
+		arg.ToAt,
+		arg.Q,
+		arg.Signal,
+		arg.Provider,
+		arg.SortBy,
+		arg.OrderAsc,
 		arg.ResultOffset,
 		arg.ResultLimit,
 	)

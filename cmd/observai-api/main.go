@@ -11,7 +11,8 @@ import (
 	"time"
 
 	inboundhttp "github.com/guferreira1/observai-api/internal/adapters/inbound/http"
-	"github.com/guferreira1/observai-api/internal/adapters/outbound/fake"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/null"
+	uuidadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/uuid"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 	"github.com/guferreira1/observai-api/internal/platform/config"
 	"github.com/guferreira1/observai-api/internal/platform/health"
@@ -63,7 +64,7 @@ func main() {
 	queue := newAnalysisQueue(cfg, log, providerMetrics)
 	defer queue.close()
 
-	ids := fake.NewIDGenerator("analysis")
+	ids := uuidadapter.NewIDGenerator()
 
 	providers, err := newProviders(cfg, log, providerMetrics)
 	if err != nil {
@@ -86,9 +87,13 @@ func main() {
 		cfg.AnalysisContextCacheTTL,
 		store.chatHistory,
 		providers.responder,
-	).WithLocker(queue.locker)
+	).WithLocker(queue.locker).WithFeedbackRepository(store.chatFeedback)
+
+	traceUseCase := usecase.NewTrace(store.repository, null.NewTraceProvider())
 
 	checker := health.NewChecker(2*time.Second, buildHealthProbes(store, cache, providers)...)
+
+	capabilities := buildCapabilities(cfg, providers, version)
 
 	router := inboundhttp.NewRouter(analysisUseCase, chatUseCase, inboundhttp.RouterOptions{
 		Logger:             log,
@@ -98,9 +103,16 @@ func main() {
 			RequestsPerSecond: cfg.HTTPRateLimit.RequestsPerSecond,
 			Burst:             cfg.HTTPRateLimit.Burst,
 		},
-		Metrics:   metricsHandler,
-		Liveness:  health.LivenessHandler(),
-		Readiness: health.ReadinessHandler(checker),
+		Metrics:      metricsHandler,
+		Liveness:     health.LivenessHandler(),
+		Readiness:    health.ReadinessHandler(checker),
+		Capabilities: capabilities,
+		Provider: inboundhttp.ProviderSummary{
+			Mode:          capabilities.Mode,
+			LLM:           capabilities.LLM.Provider,
+			Observability: providerNames(capabilities.Observability),
+		},
+		Trace: traceUseCase,
 	})
 	handler := metrics.Middleware(telemetry.WrapHandler("observai-api", router))
 	srv := server.New(cfg, handler)

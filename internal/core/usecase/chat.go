@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ type Chat struct {
 	history    ports.ChatHistoryRepository
 	responder  ports.ChatResponder
 	locker     ports.AnalysisLocker
+	feedback   ports.ChatFeedbackRepository
 	scope      chatScopePolicy
 	now        func() time.Time
 }
@@ -57,6 +59,61 @@ func (useCase *Chat) WithLocker(locker ports.AnalysisLocker) *Chat {
 	}
 	useCase.locker = locker
 	return useCase
+}
+
+// WithFeedbackRepository attaches the repository used to persist user feedback.
+func (useCase *Chat) WithFeedbackRepository(feedback ports.ChatFeedbackRepository) *Chat {
+	useCase.feedback = feedback
+	return useCase
+}
+
+// SubmitFeedback persists feedback for a previously delivered assistant message.
+//
+// The analysis must exist; the message must belong to the same analysis and be
+// an assistant message. Repeated calls overwrite the previous feedback so
+// frontends can toggle the user's choice without creating duplicates.
+func (useCase *Chat) SubmitFeedback(ctx context.Context, feedback domain.ChatFeedback) error {
+	feedback.AnalysisID = strings.TrimSpace(feedback.AnalysisID)
+	feedback.MessageID = strings.TrimSpace(feedback.MessageID)
+	if feedback.AnalysisID == "" {
+		return fmt.Errorf("%w: analysis id is required", domain.ErrAnalysisNotFound)
+	}
+	if feedback.MessageID == "" {
+		return fmt.Errorf("%w: message id is required", domain.ErrChatMessageNotFound)
+	}
+
+	if _, err := useCase.repository.Find(ctx, feedback.AnalysisID); err != nil {
+		return fmt.Errorf("find analysis: %w", err)
+	}
+
+	if !useCase.messageBelongsToAnalysis(ctx, feedback.AnalysisID, feedback.MessageID) {
+		return fmt.Errorf("%w: %s", domain.ErrChatMessageNotFound, feedback.MessageID)
+	}
+
+	if useCase.feedback == nil {
+		return errors.New("chat feedback repository not configured")
+	}
+
+	if feedback.CreatedAt.IsZero() {
+		feedback.CreatedAt = useCase.now().UTC()
+	}
+	if err := useCase.feedback.SaveFeedback(ctx, feedback); err != nil {
+		return fmt.Errorf("save chat feedback: %w", err)
+	}
+	return nil
+}
+
+func (useCase *Chat) messageBelongsToAnalysis(ctx context.Context, analysisID string, messageID string) bool {
+	messages, err := useCase.history.List(ctx, analysisID, domain.ChatHistoryFilter{Limit: maxChatHistoryLimit})
+	if err != nil {
+		return false
+	}
+	for _, message := range messages {
+		if message.ID == messageID && message.Role == domain.ChatRoleAssistant {
+			return true
+		}
+	}
+	return false
 }
 
 // Ask answers a question only when it is related to the active analysis.
@@ -99,6 +156,7 @@ func (useCase *Chat) Ask(ctx context.Context, question domain.ChatQuestion) (dom
 		Role:       domain.ChatRoleAssistant,
 		Content:    answer.Answer,
 		Evidence:   answer.Evidence,
+		Citations:  answer.Citations,
 		CreatedAt:  useCase.now().UTC(),
 	})
 	if err != nil {
@@ -110,8 +168,53 @@ func (useCase *Chat) Ask(ctx context.Context, question domain.ChatQuestion) (dom
 	return answer, nil
 }
 
-// History returns persisted chat history for an analysis.
-func (useCase *Chat) History(ctx context.Context, analysisID string) ([]domain.ChatMessage, error) {
+// ChatStreamEvent describes a single event emitted by AskStream.
+//
+// Frontends consume an ordered stream of events: `token` events carry partial
+// or full text fragments, `evidence_cited` events carry citation references
+// and a terminal `done` event marks completion. Implementations may also emit
+// `error` events to communicate cancellation or upstream failures.
+type ChatStreamEvent struct {
+	Type     string
+	Token    string
+	Evidence []string
+}
+
+// ChatStreamSink receives streaming chat events. Implementations must be safe
+// to call from the use case goroutine and should propagate cancellation back
+// to the use case by returning an error.
+type ChatStreamSink interface {
+	Send(event ChatStreamEvent) error
+}
+
+// AskStream answers a scoped question and emits intermediate events to the supplied sink.
+//
+// The current implementation produces the full answer synchronously and then
+// emits a single `token` event followed by `evidence_cited` and `done`. Real
+// streaming LLM adapters can replace the synchronous Answer call with a
+// chunked stream without changing the public event contract.
+func (useCase *Chat) AskStream(ctx context.Context, question domain.ChatQuestion, sink ChatStreamSink) error {
+	answer, err := useCase.Ask(ctx, question)
+	if err != nil {
+		return err
+	}
+
+	if err := sink.Send(ChatStreamEvent{Type: "token", Token: answer.Answer}); err != nil {
+		return err
+	}
+	if len(answer.Evidence) > 0 {
+		if err := sink.Send(ChatStreamEvent{Type: "evidence_cited", Evidence: answer.Evidence}); err != nil {
+			return err
+		}
+	}
+	return sink.Send(ChatStreamEvent{Type: "done"})
+}
+
+const defaultChatHistoryLimit = 50
+const maxChatHistoryLimit = 200
+
+// History returns persisted chat history for an analysis honoring the supplied filter.
+func (useCase *Chat) History(ctx context.Context, analysisID string, filter domain.ChatHistoryFilter) ([]domain.ChatMessage, error) {
 	analysisID = strings.TrimSpace(analysisID)
 	if analysisID == "" {
 		return nil, fmt.Errorf("%w: analysis id is required", domain.ErrAnalysisNotFound)
@@ -121,12 +224,23 @@ func (useCase *Chat) History(ctx context.Context, analysisID string) ([]domain.C
 		return nil, fmt.Errorf("find analysis: %w", err)
 	}
 
-	messages, err := useCase.history.List(ctx, analysisID)
+	filter = normalizeChatHistoryFilter(filter)
+	messages, err := useCase.history.List(ctx, analysisID, filter)
 	if err != nil {
 		return nil, fmt.Errorf("list chat history: %w", err)
 	}
 
 	return messages, nil
+}
+
+func normalizeChatHistoryFilter(filter domain.ChatHistoryFilter) domain.ChatHistoryFilter {
+	if filter.Limit <= 0 {
+		filter.Limit = defaultChatHistoryLimit
+	}
+	if filter.Limit > maxChatHistoryLimit {
+		filter.Limit = maxChatHistoryLimit
+	}
+	return filter
 }
 
 func (useCase *Chat) findAnalysisContext(ctx context.Context, analysisID string) (domain.AnalysisContext, error) {

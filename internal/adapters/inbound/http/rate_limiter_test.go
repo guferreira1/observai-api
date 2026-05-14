@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guferreira1/observai-api/internal/adapters/outbound/fake"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/testfakes"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,16 +65,16 @@ func TestNewRateLimiterReturnsNilWhenDisabled(t *testing.T) {
 func TestRouterEnforcesRateLimit(t *testing.T) {
 	t.Parallel()
 
-	repository := fake.NewAnalysisRepository()
+	repository := inmemory.NewAnalysisRepository()
 	analysis := usecase.NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
 		repository,
-		fake.NewAnalysisContextCache(),
+		inmemory.NewAnalysisContextCache(),
 		6*time.Hour,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	)
-	chat := usecase.NewChat(repository, fake.NewAnalysisContextCache(), 6*time.Hour, repository, fake.NewChatResponder())
+	chat := usecase.NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, testfakes.NewChatResponder())
 
 	router := NewRouter(analysis, chat, RouterOptions{
 		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),

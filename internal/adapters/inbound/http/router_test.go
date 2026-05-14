@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guferreira1/observai-api/internal/adapters/outbound/fake"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/testfakes"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,6 +70,8 @@ func TestRouterGetAnalysisJobReturnsCompletedStatus(t *testing.T) {
 	require.NoError(t, json.Unmarshal(statusResponse.Body.Bytes(), &payload))
 	assert.Equal(t, "analysis-000001", payload.Data.JobID)
 	assert.Equal(t, "completed", payload.Data.Status)
+	assert.Equal(t, "done", payload.Data.Phase)
+	assert.Equal(t, 100, payload.Data.ProgressPercent)
 	assert.Equal(t, "analysis-000001", payload.Data.AnalysisID)
 	assert.Equal(t, "/v1/analyses/analysis-000001", payload.Data.AnalysisURL)
 }
@@ -159,6 +162,7 @@ func TestRouterListsAnalysesWithPaginationMetadata(t *testing.T) {
 	require.NotNil(t, payload.Metadata.Pagination)
 	assert.Equal(t, 1, payload.Metadata.Pagination.Limit)
 	assert.Equal(t, 0, payload.Metadata.Pagination.Offset)
+	assert.Equal(t, 1, payload.Metadata.Pagination.Total)
 	assert.Empty(t, payload.Metadata.Pagination.Next)
 }
 
@@ -177,6 +181,80 @@ func TestRouterRejectsInvalidAnalysisListFilter(t *testing.T) {
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
 	assert.Equal(t, "invalid_analysis_filter", payload.Data.Code)
 	assert.Contains(t, payload.Data.Message, "severity")
+	require.Len(t, payload.Data.Details, 1)
+	assert.Equal(t, "severity", payload.Data.Details[0].Field)
+	assert.Equal(t, "enum", payload.Data.Details[0].Rule)
+	assert.NotEmpty(t, payload.Metadata.RequestID)
+}
+
+func TestRouterRejectsUnsupportedSignalFilter(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses?signal=events", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
+
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "invalid_analysis_filter", payload.Data.Code)
+	require.Len(t, payload.Data.Details, 1)
+	assert.Equal(t, "signal", payload.Data.Details[0].Field)
+	assert.Equal(t, "enum", payload.Data.Details[0].Rule)
+}
+
+func TestRouterRejectsUnsupportedSortFilter(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses?sort=cost", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
+
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "invalid_analysis_filter", payload.Data.Code)
+}
+
+func TestRouterRejectsMalformedTimeFilter(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses?from=2026-13-32", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
+
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "invalid_analysis_filter", payload.Data.Code)
+	require.Len(t, payload.Data.Details, 1)
+	assert.Equal(t, "from", payload.Data.Details[0].Field)
+	assert.Equal(t, "rfc3339", payload.Data.Details[0].Rule)
+}
+
+func TestRouterRejectsInvalidAnalysisListLimit(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses?limit=-3", nil)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
+
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "invalid_analysis_filter", payload.Data.Code)
+	require.Len(t, payload.Data.Details, 1)
+	assert.Equal(t, "limit", payload.Data.Details[0].Field)
+	assert.Equal(t, "non_negative_integer", payload.Data.Details[0].Rule)
 }
 
 func TestRouterReturnsValidationDetailsOnPayloadFailure(t *testing.T) {
@@ -228,16 +306,16 @@ func TestRouterPropagatesRequestIDFromHeader(t *testing.T) {
 func TestRouterRejectsBodyLargerThanLimit(t *testing.T) {
 	t.Parallel()
 
-	repository := fake.NewAnalysisRepository()
+	repository := inmemory.NewAnalysisRepository()
 	analysis := usecase.NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
 		repository,
-		fake.NewAnalysisContextCache(),
+		inmemory.NewAnalysisContextCache(),
 		6*time.Hour,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	)
-	chat := usecase.NewChat(repository, fake.NewAnalysisContextCache(), 6*time.Hour, repository, fake.NewChatResponder())
+	chat := usecase.NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, testfakes.NewChatResponder())
 
 	router := NewRouter(analysis, chat, RouterOptions{
 		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -363,28 +441,266 @@ func TestRouterExposesMetricsEndpoint(t *testing.T) {
 	assert.NotEqual(t, stdhttp.StatusNotFound, response.Code)
 }
 
+type flushableRecorder struct {
+	*httptest.ResponseRecorder
+}
+
+func (recorder *flushableRecorder) Flush() {}
+
+func TestRouterChatStreamsSSEEventsWhenRequested(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"]
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
+
+	chatRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses/analysis-000001/chat", bytes.NewBufferString(`{"question": "which evidence supports this analysis?"}`))
+	chatRequest.Header.Set("Accept", "text/event-stream")
+	chatResponse := &flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	router.ServeHTTP(chatResponse, chatRequest)
+	require.Equal(t, stdhttp.StatusOK, chatResponse.Code)
+	assert.Equal(t, "text/event-stream", chatResponse.Header().Get("Content-Type"))
+
+	body := chatResponse.Body.String()
+	assert.Contains(t, body, "event: token")
+	assert.Contains(t, body, "event: done")
+}
+
+func TestRouterExportsAnalysisAsMarkdown(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"]
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
+
+	exportRequest := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses/analysis-000001/export?format=md", nil)
+	exportResponse := httptest.NewRecorder()
+	router.ServeHTTP(exportResponse, exportRequest)
+	require.Equal(t, stdhttp.StatusOK, exportResponse.Code)
+	assert.Contains(t, exportResponse.Header().Get("Content-Type"), "text/markdown")
+	assert.Contains(t, exportResponse.Body.String(), "# ObservAI analysis analysis-000001")
+	assert.Contains(t, exportResponse.Header().Get("Content-Disposition"), "analysis-000001.md")
+}
+
+func TestRouterRejectsUnknownExportFormat(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"]
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
+
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses/analysis-000001/export?format=pdf", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
+
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "invalid_export_format", payload.Data.Code)
+}
+
+func TestRouterReturnsTraceInsights(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"]
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
+
+	tracesRequest := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses/analysis-000001/traces", nil)
+	tracesResponse := httptest.NewRecorder()
+	router.ServeHTTP(tracesResponse, tracesRequest)
+	require.Equal(t, stdhttp.StatusOK, tracesResponse.Code)
+
+	var payload WrapperDtoResponde[TraceInsightsResponseDto]
+	require.NoError(t, json.Unmarshal(tracesResponse.Body.Bytes(), &payload))
+	require.NotEmpty(t, payload.Data.Spans)
+	require.NotEmpty(t, payload.Data.CriticalPathSpanIDs)
+	require.NotEmpty(t, payload.Data.SlowestSpanIDs)
+	assert.Equal(t, "span-root", payload.Data.CriticalPathSpanIDs[0])
+	assert.NotEmpty(t, payload.Data.DependencyEdges)
+}
+
+func TestRouterCancelAnalysisJobMarksCanceled(t *testing.T) {
+	t.Parallel()
+
+	repository := inmemory.NewAnalysisRepository()
+	jobRepository := inmemory.NewAnalysisJobRepository()
+	enqueuer := inmemory.NewJobEnqueuer(inmemory.NewAnalysisQueue(1))
+	analysis := usecase.NewAnalysis(
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
+		repository,
+		inmemory.NewAnalysisContextCache(),
+		6*time.Hour,
+		testfakes.NewIDGenerator("analysis"),
+	).WithAsyncBackend(jobRepository, enqueuer)
+
+	chat := usecase.NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, testfakes.NewChatResponder()).
+		WithLocker(inmemory.NewAnalysisLocker())
+
+	router := NewRouter(analysis, chat, RouterOptions{
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout:     5 * time.Second,
+		MaxRequestBodyByte: 1 << 20,
+	})
+
+	submit := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"]
+	}`))
+	submitResponse := httptest.NewRecorder()
+	router.ServeHTTP(submitResponse, submit)
+	require.Equal(t, stdhttp.StatusAccepted, submitResponse.Code)
+
+	cancelRequest := httptest.NewRequest(stdhttp.MethodDelete, "/v1/jobs/analysis-000001", nil)
+	cancelResponse := httptest.NewRecorder()
+	router.ServeHTTP(cancelResponse, cancelRequest)
+	require.Equal(t, stdhttp.StatusAccepted, cancelResponse.Code)
+
+	var payload WrapperDtoResponde[AnalysisJobStatusDto]
+	require.NoError(t, json.Unmarshal(cancelResponse.Body.Bytes(), &payload))
+	assert.Equal(t, "analysis-000001", payload.Data.JobID)
+	assert.Equal(t, "canceled", payload.Data.Status)
+
+	idempotentRequest := httptest.NewRequest(stdhttp.MethodDelete, "/v1/jobs/analysis-000001", nil)
+	idempotentResponse := httptest.NewRecorder()
+	router.ServeHTTP(idempotentResponse, idempotentRequest)
+	require.Equal(t, stdhttp.StatusAccepted, idempotentResponse.Code)
+
+	var idempotent WrapperDtoResponde[AnalysisJobStatusDto]
+	require.NoError(t, json.Unmarshal(idempotentResponse.Body.Bytes(), &idempotent))
+	assert.Equal(t, "canceled", idempotent.Data.Status)
+}
+
+func TestRouterCancelAnalysisJobReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	request := httptest.NewRequest(stdhttp.MethodDelete, "/v1/jobs/job-missing", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, stdhttp.StatusNotFound, response.Code)
+
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "analysis_job_not_found", payload.Data.Code)
+}
+
+func TestRouterExposesCapabilities(t *testing.T) {
+	t.Parallel()
+
+	repository := inmemory.NewAnalysisRepository()
+	jobRepository := inmemory.NewAnalysisJobRepository()
+	enqueuer := inmemory.NewSynchronousJobEnqueuer()
+	analysis := usecase.NewAnalysis(
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
+		repository,
+		inmemory.NewAnalysisContextCache(),
+		6*time.Hour,
+		testfakes.NewIDGenerator("analysis"),
+	).WithAsyncBackend(jobRepository, enqueuer)
+	enqueuer.SetHandler(analysis.RunAnalysisJob)
+
+	chat := usecase.NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, testfakes.NewChatResponder()).
+		WithLocker(inmemory.NewAnalysisLocker())
+
+	capabilities := CapabilitiesResponse{
+		Mode:    "local",
+		Version: "test",
+		LLM:     CapabilityLLM{Provider: "fake"},
+		Observability: []CapabilityProvider{
+			{Provider: "fake", Signals: []string{"logs", "metrics"}},
+		},
+		Limits: CapabilityLimits{
+			HTTPRequestTimeoutMs: 5000,
+			HTTPMaxBodyBytes:     1 << 20,
+		},
+	}
+
+	router := NewRouter(analysis, chat, RouterOptions{
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout:     5 * time.Second,
+		MaxRequestBodyByte: 1 << 20,
+		Capabilities:       capabilities,
+		Provider: ProviderSummary{
+			Mode:          "local",
+			LLM:           "fake",
+			Observability: []string{"fake"},
+		},
+	})
+
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/capabilities", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, stdhttp.StatusOK, response.Code)
+
+	var payload WrapperDtoResponde[CapabilitiesResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "local", payload.Data.Mode)
+	assert.Equal(t, "test", payload.Data.Version)
+	assert.Equal(t, "fake", payload.Data.LLM.Provider)
+	require.Len(t, payload.Data.Observability, 1)
+	assert.Equal(t, "fake", payload.Data.Observability[0].Provider)
+	assert.Equal(t, int64(5000), payload.Data.Limits.HTTPRequestTimeoutMs)
+	assert.Equal(t, "local", payload.Metadata.Provider.Mode)
+	assert.Equal(t, "fake", payload.Metadata.Provider.LLM)
+}
+
 func newTestRouter() stdhttp.Handler {
 	router, _ := newTestRouterWithBackend()
 	return router
 }
 
-func newTestRouterWithBackend() (stdhttp.Handler, *fake.AnalysisJobRepository) {
-	repository := fake.NewAnalysisRepository()
-	jobRepository := fake.NewAnalysisJobRepository()
-	enqueuer := fake.NewSynchronousJobEnqueuer()
+func newTestRouterWithBackend() (stdhttp.Handler, *inmemory.AnalysisJobRepository) {
+	repository := inmemory.NewAnalysisRepository()
+	jobRepository := inmemory.NewAnalysisJobRepository()
+	enqueuer := inmemory.NewSynchronousJobEnqueuer()
 
 	analysis := usecase.NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
 		repository,
-		fake.NewAnalysisContextCache(),
+		inmemory.NewAnalysisContextCache(),
 		6*time.Hour,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	).WithAsyncBackend(jobRepository, enqueuer)
 	enqueuer.SetHandler(analysis.RunAnalysisJob)
 
-	chat := usecase.NewChat(repository, fake.NewAnalysisContextCache(), 6*time.Hour, repository, fake.NewChatResponder()).
-		WithLocker(fake.NewAnalysisLocker())
+	chat := usecase.NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, testfakes.NewChatResponder()).
+		WithLocker(inmemory.NewAnalysisLocker()).
+		WithFeedbackRepository(inmemory.NewChatFeedbackRepository())
+
+	traces := usecase.NewTrace(repository, testfakes.NewTraceProvider())
 
 	router := NewRouter(analysis, chat, RouterOptions{
 		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -393,6 +709,7 @@ func newTestRouterWithBackend() (stdhttp.Handler, *fake.AnalysisJobRepository) {
 		Metrics: stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
 			writer.WriteHeader(stdhttp.StatusOK)
 		}),
+		Trace: traces,
 	})
 	return router, jobRepository
 }

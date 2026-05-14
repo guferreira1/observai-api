@@ -7,6 +7,8 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createChatMessage = `-- name: CreateChatMessage :one
@@ -60,13 +62,31 @@ SELECT
     content,
     evidence,
     created_at
-FROM analysis_chat_messages
-WHERE analysis_id = $1
+FROM (
+    SELECT
+        id,
+        analysis_id,
+        role,
+        content,
+        evidence,
+        created_at
+    FROM analysis_chat_messages
+    WHERE analysis_id = $1
+      AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
+    ORDER BY created_at DESC, id DESC
+    LIMIT $3
+) AS page
 ORDER BY created_at ASC, id ASC
 `
 
-func (q *Queries) ListChatMessagesByAnalysis(ctx context.Context, analysisID string) ([]AnalysisChatMessage, error) {
-	rows, err := q.db.Query(ctx, listChatMessagesByAnalysis, analysisID)
+type ListChatMessagesByAnalysisParams struct {
+	AnalysisID  string             `json:"analysis_id"`
+	Before      pgtype.Timestamptz `json:"before"`
+	ResultLimit int32              `json:"result_limit"`
+}
+
+func (q *Queries) ListChatMessagesByAnalysis(ctx context.Context, arg ListChatMessagesByAnalysisParams) ([]AnalysisChatMessage, error) {
+	rows, err := q.db.Query(ctx, listChatMessagesByAnalysis, arg.AnalysisID, arg.Before, arg.ResultLimit)
 	if err != nil {
 		return nil, err
 	}

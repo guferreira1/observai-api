@@ -12,8 +12,9 @@ import (
 	"time"
 
 	inboundhttp "github.com/guferreira1/observai-api/internal/adapters/inbound/http"
-	"github.com/guferreira1/observai-api/internal/adapters/outbound/fake"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/postgres"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/testfakes"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 	"github.com/stretchr/testify/require"
 )
@@ -28,24 +29,24 @@ func buildIntegrationServer(ctx context.Context, t *testing.T, dsn string) *http
 	t.Cleanup(repository.Close)
 
 	jobRepository := postgres.NewAnalysisJobRepository(repository.Pool())
-	enqueuer := fake.NewSynchronousJobEnqueuer()
+	enqueuer := inmemory.NewSynchronousJobEnqueuer()
 	analysisUseCase := usecase.NewAnalysis(
-		fake.NewSignalCollector(),
-		fake.NewAnalysisGenerator(),
+		testfakes.NewSignalCollector(),
+		testfakes.NewAnalysisGenerator(),
 		repository,
-		fake.NewAnalysisContextCache(),
+		inmemory.NewAnalysisContextCache(),
 		integrationAnalysisContextCacheTTL,
-		fake.NewIDGenerator("analysis"),
+		testfakes.NewIDGenerator("analysis"),
 	).WithAsyncBackend(jobRepository, enqueuer)
 	enqueuer.SetHandler(analysisUseCase.RunAnalysisJob)
 
 	chatUseCase := usecase.NewChat(
 		repository,
-		fake.NewAnalysisContextCache(),
+		inmemory.NewAnalysisContextCache(),
 		integrationAnalysisContextCacheTTL,
 		repository,
-		fake.NewChatResponder(),
-	).WithLocker(fake.NewAnalysisLocker())
+		testfakes.NewChatResponder(),
+	).WithLocker(inmemory.NewAnalysisLocker())
 
 	router := inboundhttp.NewRouter(analysisUseCase, chatUseCase, inboundhttp.RouterOptions{
 		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),

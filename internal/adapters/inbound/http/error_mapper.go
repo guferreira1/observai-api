@@ -39,11 +39,20 @@ var domainErrorRules = []domainErrorRule{
 	{
 		match: func(err error) bool { return errors.Is(err, domain.ErrInvalidAnalysisFilter) },
 		build: func(err error) httpErrorResponse {
-			return httpErrorResponse{
+			response := httpErrorResponse{
 				status:  stdhttp.StatusBadRequest,
 				code:    "invalid_analysis_filter",
 				message: extractReason(err, domain.ErrInvalidAnalysisFilter, "analysis filter is invalid"),
 			}
+			var filterErr errInvalidAnalysisFilter
+			if errors.As(err, &filterErr) && filterErr.Field != "" {
+				response.details = []ErrorFieldDetail{{
+					Field:   filterErr.Field,
+					Rule:    filterErr.Rule,
+					Message: filterErr.Reason,
+				}}
+			}
+			return response
 		},
 	},
 	{
@@ -86,6 +95,14 @@ var domainErrorRules = []domainErrorRule{
 			status:  stdhttp.StatusNotFound,
 			code:    "analysis_job_not_found",
 			message: "analysis job not found",
+		},
+	},
+	{
+		match: func(err error) bool { return errors.Is(err, domain.ErrChatMessageNotFound) },
+		response: httpErrorResponse{
+			status:  stdhttp.StatusNotFound,
+			code:    "chat_message_not_found",
+			message: "chat message not found",
 		},
 	},
 	{
@@ -139,11 +156,15 @@ var domainErrorRules = []domainErrorRule{
 		build: func(err error) httpErrorResponse {
 			var malformed errRequestBodyMalformed
 			_ = errors.As(err, &malformed)
-			return httpErrorResponse{
+			response := httpErrorResponse{
 				status:  stdhttp.StatusBadRequest,
 				code:    "invalid_json",
 				message: malformed.Reason,
 			}
+			if malformed.Field != "" {
+				response.details = []ErrorFieldDetail{{Field: malformed.Field, Rule: malformed.Rule}}
+			}
+			return response
 		},
 	},
 	{

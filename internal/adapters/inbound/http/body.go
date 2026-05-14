@@ -13,7 +13,11 @@ var errRequestBodyTooLarge = errors.New("request body too large")
 
 var errRequestBodyEmpty = errors.New("request body is empty")
 
-type errRequestBodyMalformed struct{ Reason string }
+type errRequestBodyMalformed struct {
+	Reason string
+	Field  string
+	Rule   string
+}
 
 func (err errRequestBodyMalformed) Error() string { return "malformed json: " + err.Reason }
 
@@ -116,7 +120,11 @@ func translateTypeError(err error) (error, bool) {
 	if field == "" {
 		field = typeError.Type.String()
 	}
-	return errRequestBodyMalformed{Reason: fmt.Sprintf("field %q expects %s", field, typeError.Type.String())}, true
+	return errRequestBodyMalformed{
+		Reason: fmt.Sprintf("field %q expects %s", field, typeError.Type.String()),
+		Field:  field,
+		Rule:   "invalid_type",
+	}, true
 }
 
 func translateUnknownFieldError(err error) (error, bool) {

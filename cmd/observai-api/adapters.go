@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/guferreira1/observai-api/internal/adapters/outbound/fake"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/postgres"
 	redisadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/redis"
 	"github.com/guferreira1/observai-api/internal/core/ports"
@@ -20,6 +20,7 @@ type analysisStore struct {
 	repository    ports.AnalysisRepository
 	chatHistory   ports.ChatHistoryRepository
 	jobRepository ports.AnalysisJobRepository
+	chatFeedback  ports.ChatFeedbackRepository
 	close         func()
 	postgres      *postgres.AnalysisRepository
 }
@@ -43,15 +44,17 @@ type redisLockerHandle struct {
 }
 
 func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observability.ProviderObserver) analysisStore {
-	fakeRepository := fake.NewAnalysisRepository()
-	fakeJobs := fake.NewAnalysisJobRepository()
+	inMemoryRepository := inmemory.NewAnalysisRepository()
+	inMemoryJobs := inmemory.NewAnalysisJobRepository()
+	inMemoryFeedback := inmemory.NewChatFeedbackRepository()
 	databaseDSN := strings.TrimSpace(cfg.DatabaseDSN)
 	if databaseDSN == "" {
 		log.Warn("postgres repository disabled; using in-memory analysis repository")
 		return analysisStore{
-			repository:    fakeRepository,
-			chatHistory:   fakeRepository,
-			jobRepository: fakeJobs,
+			repository:    inMemoryRepository,
+			chatHistory:   inMemoryRepository,
+			jobRepository: inMemoryJobs,
+			chatFeedback:  inMemoryFeedback,
 			close:         func() {},
 		}
 	}
@@ -65,12 +68,14 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 	}
 
 	jobRepository := postgres.NewAnalysisJobRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	chatFeedbackRepository := postgres.NewChatFeedbackRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 
 	log.Info("postgres repository enabled")
 	return analysisStore{
 		repository:    postgresRepository,
 		chatHistory:   postgresRepository,
 		jobRepository: jobRepository,
+		chatFeedback:  chatFeedbackRepository,
 		close:         postgresRepository.Close,
 		postgres:      postgresRepository,
 	}
@@ -81,7 +86,7 @@ func newAnalysisContextCache(cfg config.Config, log *slog.Logger, observer obser
 	if redisURL == "" {
 		log.Warn("redis analysis context cache disabled; using in-memory cache")
 		return analysisContextCache{
-			contexts: fake.NewAnalysisContextCache(),
+			contexts: inmemory.NewAnalysisContextCache(),
 			close:    func() {},
 		}
 	}
@@ -162,10 +167,10 @@ func newAnalysisQueue(cfg config.Config, log *slog.Logger, observer observabilit
 }
 
 func buildInMemoryQueue(cfg config.Config) analysisQueue {
-	queue := fake.NewAnalysisQueue(cfg.Queue.Concurrency * 8)
-	enqueuer := fake.NewJobEnqueuer(queue)
-	worker := fake.NewQueueWorker(queue, cfg.Queue.Concurrency)
-	locker := fake.NewAnalysisLocker()
+	queue := inmemory.NewAnalysisQueue(cfg.Queue.Concurrency * 8)
+	enqueuer := inmemory.NewJobEnqueuer(queue)
+	worker := inmemory.NewQueueWorker(queue, cfg.Queue.Concurrency)
+	locker := inmemory.NewAnalysisLocker()
 	return analysisQueue{
 		enqueuer: enqueuer,
 		locker:   locker,

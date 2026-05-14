@@ -1,4 +1,4 @@
-package fake
+package testfakes
 
 import (
 	"context"
@@ -6,13 +6,13 @@ import (
 	"sync/atomic"
 )
 
-// IDGenerator creates deterministic identifiers for local execution and tests.
+// IDGenerator creates deterministic monotonic identifiers for tests.
 type IDGenerator struct {
 	prefix string
 	next   atomic.Uint64
 }
 
-// NewIDGenerator creates a deterministic identifier generator.
+// NewIDGenerator creates a deterministic identifier generator for tests.
 func NewIDGenerator(prefix string) *IDGenerator {
 	return &IDGenerator{prefix: prefix}
 }
