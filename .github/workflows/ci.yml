@@ -1,15 +1,29 @@
 name: API CI
 
-on:
+"on":
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: api-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OBSERVAI_TEST_DATABASE_DSN: postgres://observai:observai@localhost:5432/observai?sslmode=disable
+
 jobs:
   validate:
-    name: Validate Go project
+    name: Validate Go source
     runs-on: ubuntu-latest
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -29,76 +43,87 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Detect Go project
-        id: detect
-        shell: bash
-        run: |
-          if [ -f "go.mod" ]; then
-            echo "go_project=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "go_project=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Setup Go
-        if: steps.detect.outputs.go_project == 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.sum
 
-      - name: Download dependencies
-        if: steps.detect.outputs.go_project == 'true'
-        run: go mod download
+      - name: Download and verify dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Check go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
 
       - name: Install validation tools
-        if: steps.detect.outputs.go_project == 'true'
         run: |
           go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
           go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.0
 
-      - name: Format check
-        if: steps.detect.outputs.go_project == 'true'
+      - name: Check formatting
+        shell: bash
         run: |
-          test -z "$(gofmt -l .)"
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
 
       - name: Vet
-        if: steps.detect.outputs.go_project == 'true'
         run: go vet ./...
 
-      - name: golangci-lint
-        if: steps.detect.outputs.go_project == 'true'
+      - name: Lint
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          args: --timeout=5m
 
-      - name: sqlc compile
-        if: steps.detect.outputs.go_project == 'true'
+      - name: Validate sqlc configuration
         run: sqlc compile
 
-      - name: sqlc generated diff
-        if: steps.detect.outputs.go_project == 'true'
-        run: sqlc diff
+      - name: Check generated sqlc code is committed
+        run: |
+          sqlc generate
+          git diff --exit-code -- internal/adapters/outbound/postgres/sqlc
 
-      - name: Migration check
-        if: steps.detect.outputs.go_project == 'true'
-        env:
-          OBSERVAI_TEST_DATABASE_DSN: postgres://observai:observai@localhost:5432/observai?sslmode=disable
+      - name: Validate database migrations
         run: |
           migrate -path migrations -database "$OBSERVAI_TEST_DATABASE_DSN" up
           migrate -path migrations -database "$OBSERVAI_TEST_DATABASE_DSN" down -all
 
       - name: Test
-        if: steps.detect.outputs.go_project == 'true'
-        env:
-          OBSERVAI_TEST_DATABASE_DSN: postgres://observai:observai@localhost:5432/observai?sslmode=disable
         run: |
           migrate -path migrations -database "$OBSERVAI_TEST_DATABASE_DSN" up
-          go test ./... -race -coverprofile=coverage.out
+          go test ./... -race -count=1 -coverprofile=coverage.out
 
-      - name: Build
-        if: steps.detect.outputs.go_project == 'true'
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: coverage.out
+          if-no-files-found: ignore
+
+      - name: Build Go packages
         run: go build ./...
 
-      - name: Skip validation
-        if: steps.detect.outputs.go_project == 'false'
-        run: echo "go.mod not found yet. Skipping Go validation until the project is initialized."
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: observai-api:ci
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
