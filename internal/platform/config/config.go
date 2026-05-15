@@ -108,13 +108,14 @@ type ObservabilityConfig struct {
 // hosted providers (OpenAI, Anthropic, Azure OpenAI, OpenRouter). It is
 // read at adapter construction time so secrets stay out of YAML.
 type LLMProviderConfig struct {
-	Type      string        `yaml:"type"`
-	Name      string        `yaml:"name"`
-	URL       string        `yaml:"url"`
-	BaseURL   string        `yaml:"base_url"`
-	Model     string        `yaml:"model"`
-	APIKeyEnv string        `yaml:"api_key_env"`
-	Timeout   time.Duration `yaml:"timeout"`
+	Type      string            `yaml:"type"`
+	Name      string            `yaml:"name"`
+	URL       string            `yaml:"url"`
+	BaseURL   string            `yaml:"base_url"`
+	Model     string            `yaml:"model"`
+	APIKeyEnv string            `yaml:"api_key_env"`
+	Timeout   time.Duration     `yaml:"timeout"`
+	Options   map[string]string `yaml:"options"`
 }
 
 // LLMConfig groups the LLM providers wired into the API and the active selection.

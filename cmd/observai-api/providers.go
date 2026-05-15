@@ -192,6 +192,7 @@ func mergeDBLLMIntoConfig(cfg config.Config, active *domain.LLMConfig, plaintext
 		BaseURL: active.BaseURL,
 		Model:   active.Model,
 		Timeout: active.Timeout,
+		Options: active.Options,
 	}
 	if plaintextAPIKey != "" {
 		provider.APIKeyEnv = "literal:" + plaintextAPIKey

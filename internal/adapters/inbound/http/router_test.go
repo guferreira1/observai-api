@@ -676,6 +676,67 @@ func TestRouterExposesCapabilities(t *testing.T) {
 	assert.Equal(t, "fake", payload.Metadata.Provider.LLM)
 }
 
+func TestRecoverMiddlewareUsesConfiguredProviderSummary(t *testing.T) {
+	t.Parallel()
+
+	provider := ProviderSummary{
+		Mode:          "prod",
+		LLM:           "ollama-prod",
+		Observability: []string{"prometheus-prod"},
+	}
+	handler := recoverMiddleware(slog.New(slog.NewTextHandler(io.Discard, nil)), func() ProviderSummary {
+		return provider
+	})(stdhttp.HandlerFunc(func(stdhttp.ResponseWriter, *stdhttp.Request) {
+		panic("boom")
+	}))
+	request := httptest.NewRequest(stdhttp.MethodGet, "/panic", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusInternalServerError, response.Code)
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "internal_error", payload.Data.Code)
+	assert.Equal(t, provider.Mode, payload.Metadata.Provider.Mode)
+	assert.Equal(t, provider.LLM, payload.Metadata.Provider.LLM)
+	assert.Equal(t, provider.Observability, payload.Metadata.Provider.Observability)
+}
+
+func TestRateLimitMiddlewareUsesConfiguredProviderSummary(t *testing.T) {
+	t.Parallel()
+
+	provider := ProviderSummary{
+		Mode:          "prod",
+		LLM:           "openai-prod",
+		Observability: []string{"loki-prod"},
+	}
+	limiter := newRateLimiter(RateLimitConfig{RequestsPerSecond: 0.01, Burst: 1})
+	handler := rateLimitMiddleware(limiter, func() ProviderSummary {
+		return provider
+	})(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		writer.WriteHeader(stdhttp.StatusNoContent)
+	}))
+	first := httptest.NewRequest(stdhttp.MethodGet, "/limited", nil)
+	first.RemoteAddr = "203.0.113.10:1000"
+	firstResponse := httptest.NewRecorder()
+	second := httptest.NewRequest(stdhttp.MethodGet, "/limited", nil)
+	second.RemoteAddr = "203.0.113.10:1001"
+	secondResponse := httptest.NewRecorder()
+
+	handler.ServeHTTP(firstResponse, first)
+	handler.ServeHTTP(secondResponse, second)
+
+	require.Equal(t, stdhttp.StatusNoContent, firstResponse.Code)
+	require.Equal(t, stdhttp.StatusTooManyRequests, secondResponse.Code)
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(secondResponse.Body.Bytes(), &payload))
+	assert.Equal(t, "rate_limited", payload.Data.Code)
+	assert.Equal(t, provider.Mode, payload.Metadata.Provider.Mode)
+	assert.Equal(t, provider.LLM, payload.Metadata.Provider.LLM)
+	assert.Equal(t, provider.Observability, payload.Metadata.Provider.Observability)
+}
+
 func newTestRouter() stdhttp.Handler {
 	router, _ := newTestRouterWithBackend()
 	return router

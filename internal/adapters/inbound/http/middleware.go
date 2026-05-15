@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	stdhttp "net/http"
 	"strings"
@@ -90,7 +91,7 @@ func bodyLimitMiddleware(maxBytes int64) func(stdhttp.Handler) stdhttp.Handler {
 }
 
 // recoverMiddleware converts panics into a sanitized JSON 500 response and logs the cause.
-func recoverMiddleware(base *slog.Logger) func(stdhttp.Handler) stdhttp.Handler {
+func recoverMiddleware(base *slog.Logger, provider providerSummaryProvider) func(stdhttp.Handler) stdhttp.Handler {
 	return func(next stdhttp.Handler) stdhttp.Handler {
 		return stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			defer func() {
@@ -109,7 +110,7 @@ func recoverMiddleware(base *slog.Logger) func(stdhttp.Handler) stdhttp.Handler 
 					slog.String("path", routePattern(request)),
 				)
 
-				writePanicResponse(writer, requestIDFromContext(request.Context()))
+				writePanicResponse(writer, requestIDFromContext(request.Context()), middlewareProviderSummary(provider))
 			}()
 
 			next.ServeHTTP(writer, request)
@@ -117,11 +118,43 @@ func recoverMiddleware(base *slog.Logger) func(stdhttp.Handler) stdhttp.Handler 
 	}
 }
 
-func writePanicResponse(writer stdhttp.ResponseWriter, requestID string) {
+type providerSummaryProvider func() ProviderSummary
+
+func writePanicResponse(writer stdhttp.ResponseWriter, requestID string, provider ProviderSummary) {
+	writeMiddlewareErrorResponse(writer, requestID, stdhttp.StatusInternalServerError, "", ErrorResponse{
+		Code:    "internal_error",
+		Message: "internal server error",
+	}, provider)
+}
+
+func writeMiddlewareErrorResponse(writer stdhttp.ResponseWriter, requestID string, status int, retryAfter string, response ErrorResponse, provider ProviderSummary) {
 	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set(requestIDHeader, requestID)
-	writer.WriteHeader(stdhttp.StatusInternalServerError)
-	_, _ = writer.Write([]byte(`{"data":{"code":"internal_error","message":"internal server error"},"metadata":{"requestId":"` + requestID + `","processingTimeMs":0,"provider":{"mode":"local"}}}`))
+	if requestID != "" {
+		writer.Header().Set(requestIDHeader, requestID)
+	}
+	if retryAfter != "" {
+		writer.Header().Set("Retry-After", retryAfter)
+	}
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(WrapperDtoResponde[ErrorResponse]{
+		Data: response,
+		Metadata: ResponseMetadata{
+			RequestID:        requestID,
+			ProcessingTimeMs: 0,
+			Provider:         provider,
+		},
+	})
+}
+
+func middlewareProviderSummary(provider providerSummaryProvider) ProviderSummary {
+	if provider == nil {
+		return ProviderSummary{Mode: "local"}
+	}
+	summary := provider()
+	if summary.Mode == "" {
+		summary.Mode = "local"
+	}
+	return summary
 }
 
 func requestIDFromContext(ctx context.Context) string {

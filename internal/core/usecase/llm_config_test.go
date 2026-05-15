@@ -110,6 +110,25 @@ func TestLLMConfigCreateValidatesInput(t *testing.T) {
 	}
 }
 
+func TestLLMConfigCreateNormalizesOpenAICompatibleAlias(t *testing.T) {
+	useCase := NewLLMConfig(newStubLLMConfigRepo(), stubCipher{}, stubProviderTester{}, &sequentialIDs{})
+
+	created, err := useCase.Create(context.Background(), LLMConfigRequest{
+		Type:    domain.LLMProviderType("openai-compatible"),
+		Name:    "self-hosted-openai",
+		BaseURL: "http://llm-gateway:8080/v1",
+		Model:   "qwen2.5-coder",
+		Options: map[string]string{"auth": "optional"},
+	})
+
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if created.Type != domain.LLMProviderTypeOpenAI {
+		t.Fatalf("expected canonical openai type, got %q", created.Type)
+	}
+}
+
 func TestLLMConfigActivateIsMutuallyExclusive(t *testing.T) {
 	repo := newStubLLMConfigRepo()
 	useCase := NewLLMConfig(repo, stubCipher{}, stubProviderTester{}, &sequentialIDs{})

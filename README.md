@@ -208,30 +208,37 @@ ObservAI API is observability-provider agnostic.
 
 ## Configuration
 
-ObservAI can read configuration from a YAML file and still allow environment variables to override individual values.
+ObservAI is configured in two stages.
+
+Bootstrap configuration comes from environment variables and is limited to the
+settings required for the API to start: mode, port, database, Redis, encryption,
+migrations and operational guards.
+
+Application configuration is managed after startup through the admin interface
+or admin API: observability providers, LLM providers, users, API keys, webhooks,
+retention and other runtime resources.
+
+Minimum local bootstrap:
 
 ```bash
-OBSERVAI_CONFIG_FILE=config/config.example.yaml go run ./cmd/observai-api
+OBSERVAI_API_PORT=8080 \
+OBSERVAI_ENV=local \
+OBSERVAI_MODE=local \
+OBSERVAI_DATABASE_DSN=postgres://observai:observai@localhost:5432/observai?sslmode=disable \
+OBSERVAI_REDIS_URL=redis://localhost:6379/0 \
+OBSERVAI_ENCRYPTION_KEY=change-me-at-least-32-characters-long \
+go run ./cmd/observai-api
 ```
 
-Example YAML:
-
-```yaml
-port: "8080"
-env: local
-database_dsn: postgres://observai:observai@localhost:5432/observai?sslmode=disable
-redis_url: redis://localhost:6379/0
-analysis_context_cache_ttl: 6h
-```
-
-Environment variables remain supported:
+Use `.env.example` as the reference for local bootstrap variables:
 
 ```env
-OBSERVAI_CONFIG_FILE=config/config.example.yaml
 OBSERVAI_API_PORT=8080
 OBSERVAI_ENV=local
+OBSERVAI_MODE=local
 OBSERVAI_DATABASE_DSN=postgres://observai:observai@localhost:5432/observai?sslmode=disable
 OBSERVAI_REDIS_URL=redis://localhost:6379/0
+OBSERVAI_ENCRYPTION_KEY=change-me-at-least-32-characters-long
 OBSERVAI_ANALYSIS_CONTEXT_CACHE_TTL=6h
 OBSERVAI_QUEUE_CONCURRENCY=5
 OBSERVAI_QUEUE_DEQUEUE_TIMEOUT=5s
@@ -274,11 +281,14 @@ go tool air
 ```
 
 By default, the API runs in local mode with in-memory fallbacks when external
-dependencies are not configured. To run Air with the example YAML configuration,
-start the local dependencies and pass `OBSERVAI_CONFIG_FILE`:
+dependencies are not configured. To run Air against local Postgres/Redis, export
+the variables from `.env.example` first:
 
 ```bash
-OBSERVAI_CONFIG_FILE=config/config.example.yaml go tool air
+set -a
+. ./.env.example
+set +a
+go tool air
 ```
 
 ---

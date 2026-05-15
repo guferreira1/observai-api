@@ -2,43 +2,43 @@
 
 O ObservAI utiliza a mesma abstração para todos os provedores de observabilidade e LLM.
 
-As declarações ficam em dois blocos:
+As declarações de provedores e LLMs devem ser gerenciadas pela interface
+administrativa ou API admin depois que a API sobe.
 
-```yaml
-observability:
-  providers:
-    - type: prometheus | loki | elasticsearch | opensearch | jaeger | tempo | otel
-      name: observability-prod
-      url: https://...
-      timeout: 15s
-      signals: [logs | metrics | traces | apm]
-      options:
-        chave: valor
+O plano admin persiste as definições no banco, criptografa credenciais, permite
+testar conexão antes da ativação e recarrega adaptadores ativos sem reiniciar a
+API.
 
-llm:
-  providers:
-    - type: ollama | openai | azure | openrouter | anthropic
-      name: llm-prod
-      base_url: https://api.example.com/v1
-      model: gpt-4o
-      api_key_env: env:OBSERVAI_OPENAI_API_KEY
-      timeout: 60s
-  active: llm-prod
+Use a API admin quando precisar automatizar setup:
+
+```http
+POST /v1/admin/providers
+POST /v1/admin/llm-providers
+POST /v1/admin/providers/{id}/test
+POST /v1/admin/llm-providers/{id}/test
+POST /v1/admin/providers/{id}/activate
+POST /v1/admin/llm-providers/{id}/activate
 ```
 
-`active` define qual provedor de LLM será usado em runtime quando houver mais de um.
+Para gateways self-hosted compatíveis com OpenAI que não exigem token, use
+`type: openai-compatible` com `options.auth: optional`. Provedores hospedados
+continuam exigindo API key por padrão.
 
-`options` é um mapa específico de cada provedor. Sempre que possível, use referências
-seguras para credenciais:
-
-- `env:VAR` (variável de ambiente)
-- `file:/caminho/absoluto` (arquivo secreto)
-- valor literal para desenvolvimento local.
+```json
+{
+  "type": "openai-compatible",
+  "name": "local-openai",
+  "baseUrl": "http://llm-gateway:8080/v1",
+  "model": "qwen2.5-coder",
+  "options": {
+    "auth": "optional"
+  },
+  "isActive": true
+}
+```
 
 ## Regras operacionais
 
-- Para mudar configuração sem reinício, use API de admin:
-  `POST /v1/admin/providers` e `POST /v1/admin/llm-providers`.
 - Valide conectividade antes de ativar:
   `POST /v1/admin/providers/{id}/test`,
   `POST /v1/admin/llm-providers/{id}/test`.
@@ -59,4 +59,3 @@ seguras para credenciais:
 - [openai.md](./openai.md)
 - [anthropic.md](./anthropic.md)
 - [ollama.md](./ollama.md)
-

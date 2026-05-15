@@ -41,7 +41,12 @@ HTTP client -> inbound HTTP adapters -> use cases -> domain/policies
 1. Prepare configuration (minimum local mode example):
 
 ```bash
-OBSERVAI_CONFIG_FILE=config/config.example.yaml \
+OBSERVAI_API_PORT=8080 \
+OBSERVAI_ENV=local \
+OBSERVAI_MODE=local \
+OBSERVAI_DATABASE_DSN=postgres://observai:observai@localhost:5432/observai?sslmode=disable \
+OBSERVAI_REDIS_URL=redis://localhost:6379/0 \
+OBSERVAI_ENCRYPTION_KEY=change-me-at-least-32-characters-long \
 go run ./cmd/observai-api
 ```
 
@@ -97,8 +102,10 @@ curl -X POST http://localhost:8080/v1/analyses/<analysisId>/chat \
 
 ## Runtime and integration model
 
-- Integrations are configured either by `config/config.example.yaml` + YAML file,
-  or by environment variables.
+- Bootstrap settings come from environment variables so the API can start before
+  the admin interface is available.
+- Observability providers, LLM providers and other runtime resources are managed
+  through the admin interface or admin API after startup.
 - Observability and LLM providers are normalized to a provider-agnostic signal
   and result model before entering the core.
 - Every successful response follows the `WrapperDtoResponde` contract (`data`,
@@ -128,4 +135,3 @@ See:
 - `contract/README.md`
 - `providers/README.md`
 - `ROADMAP.md`
-

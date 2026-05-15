@@ -58,6 +58,32 @@ func TestNewClientFailsWhenAPIKeyIsMissing(t *testing.T) {
 	}
 }
 
+func TestClientChatAllowsMissingAPIKeyWhenConfigured(t *testing.T) {
+	var capturedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{
+		BaseURL:          server.URL,
+		AllowEmptyAPIKey: true,
+		Model:            "qwen2.5-coder",
+		Timeout:          5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	if _, err := client.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if capturedAuth != "" {
+		t.Fatalf("expected no authorization header, got %q", capturedAuth)
+	}
+}
+
 func TestNewClientFailsWhenModelIsMissing(t *testing.T) {
 	_, err := NewClient(ClientOptions{BaseURL: "https://api.openai.com/v1", APIKey: "k"})
 	if err == nil {

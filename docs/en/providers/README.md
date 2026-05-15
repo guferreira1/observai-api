@@ -2,43 +2,43 @@
 
 ObservAI uses the same provider abstraction for all observability and LLM integrations.
 
-Provider declarations are grouped in two top-level blocks:
+Provider and LLM declarations should be managed through the admin interface or
+admin API after the API starts.
 
-```yaml
-observability:
-  providers:
-    - type: prometheus | loki | elasticsearch | opensearch | jaeger | tempo | otel
-      name: observability-prod
-      url: https://...
-      timeout: 15s
-      signals: [logs | metrics | traces | apm]
-      options:
-        key: value
+The admin plane persists provider definitions in the database, encrypts
+credentials, supports test-connection before activation and hot-reloads active
+adapters without restarting the API.
 
-llm:
-  providers:
-    - type: ollama | openai | azure | openrouter | anthropic
-      name: llm-prod
-      base_url: https://api.example.com/v1
-      model: gpt-4o
-      api_key_env: env:OBSERVAI_OPENAI_API_KEY
-      timeout: 60s
-  active: llm-prod
+Use the admin API when scripting setup:
+
+```http
+POST /v1/admin/providers
+POST /v1/admin/llm-providers
+POST /v1/admin/providers/{id}/test
+POST /v1/admin/llm-providers/{id}/test
+POST /v1/admin/providers/{id}/activate
+POST /v1/admin/llm-providers/{id}/activate
 ```
 
-`active` selects the runtime LLM provider when more than one exists.
+For self-hosted OpenAI-compatible gateways that do not require a token, use
+`type: openai-compatible` with `options.auth: optional`. Hosted providers keep
+requiring an API key by default.
 
-`options` are provider-specific key-values. Credentials must be provided through secure
-references when possible:
-
-- `env:VAR` (environment variable)
-- `file:/absolute/path` (file secret)
-- plain values for local dev.
+```json
+{
+  "type": "openai-compatible",
+  "name": "local-openai",
+  "baseUrl": "http://llm-gateway:8080/v1",
+  "model": "qwen2.5-coder",
+  "options": {
+    "auth": "optional"
+  },
+  "isActive": true
+}
+```
 
 ## Operational notes
 
-- Use the provider admin API for runtime changes without restart:
-  `POST /v1/admin/providers` and `POST /v1/admin/llm-providers`.
 - Validate connectivity before enabling a provider:
   `POST /v1/admin/providers/{id}/test`,
   `POST /v1/admin/llm-providers/{id}/test`.
@@ -59,4 +59,3 @@ references when possible:
 - [openai.md](./openai.md)
 - [anthropic.md](./anthropic.md)
 - [ollama.md](./ollama.md)
-

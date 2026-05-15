@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -67,12 +68,26 @@ const (
 // IsValidLLMProviderType reports whether the supplied type is a known LLM
 // adapter.
 func IsValidLLMProviderType(value LLMProviderType) bool {
-	switch value {
-	case LLMProviderTypeOllama, LLMProviderTypeOpenAI, LLMProviderTypeAnthropic,
-		LLMProviderTypeAzure, LLMProviderTypeOpenRouter:
-		return true
+	_, ok := NormalizeLLMProviderType(value)
+	return ok
+}
+
+// NormalizeLLMProviderType converts accepted aliases to the canonical LLM
+// provider type persisted by the core.
+func NormalizeLLMProviderType(value LLMProviderType) (LLMProviderType, bool) {
+	switch strings.ToLower(strings.TrimSpace(string(value))) {
+	case string(LLMProviderTypeOllama):
+		return LLMProviderTypeOllama, true
+	case string(LLMProviderTypeOpenAI), "openai-compatible", "openai_compatible":
+		return LLMProviderTypeOpenAI, true
+	case string(LLMProviderTypeAnthropic):
+		return LLMProviderTypeAnthropic, true
+	case string(LLMProviderTypeAzure):
+		return LLMProviderTypeAzure, true
+	case string(LLMProviderTypeOpenRouter):
+		return LLMProviderTypeOpenRouter, true
 	}
-	return false
+	return "", false
 }
 
 // ProviderConfig is the persisted definition of an observability provider

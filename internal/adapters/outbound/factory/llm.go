@@ -34,11 +34,13 @@ type LLMResult struct {
 type llmBuilder func(provider config.LLMProviderConfig, deps Dependencies, clients *LLMClients) (LLMResult, error)
 
 var llmBuilders = map[string]llmBuilder{
-	"ollama":     buildOllamaLLM,
-	"openai":     buildOpenAILLM,
-	"azure":      buildOpenAILLM,
-	"openrouter": buildOpenAILLM,
-	"anthropic":  buildAnthropicLLM,
+	"ollama":            buildOllamaLLM,
+	"openai":            buildOpenAILLM,
+	"openai-compatible": buildOpenAILLM,
+	"openai_compatible": buildOpenAILLM,
+	"azure":             buildOpenAILLM,
+	"openrouter":        buildOpenAILLM,
+	"anthropic":         buildAnthropicLLM,
 }
 
 // BuildLLM resolves the active LLM provider and constructs its generator
@@ -124,25 +126,18 @@ func buildOpenAILLM(provider config.LLMProviderConfig, deps Dependencies, client
 		baseURL = strings.TrimSpace(provider.URL)
 	}
 
-	apiKeyReference := strings.TrimSpace(provider.APIKeyEnv)
-	if apiKeyReference == "" {
-		return LLMResult{}, fmt.Errorf("openai-compatible provider requires api_key_env (e.g. env:OBSERVAI_OPENAI_API_KEY)")
-	}
-	if !strings.Contains(apiKeyReference, ":") {
-		apiKeyReference = "env:" + apiKeyReference
-	}
-
-	apiKey, err := resolveCredential(context.Background(), deps.Credentials, apiKeyReference)
+	apiKey, authOptional, err := resolveOpenAIAPIKey(provider, deps)
 	if err != nil {
-		return LLMResult{}, fmt.Errorf("resolve openai api key: %w", err)
+		return LLMResult{}, err
 	}
 
 	client, err := openai.NewClient(openai.ClientOptions{
-		BaseURL:  baseURL,
-		APIKey:   apiKey,
-		Model:    provider.Model,
-		Timeout:  defaultTimeout(provider.Timeout, 60*time.Second),
-		Observer: deps.Observer,
+		BaseURL:          baseURL,
+		APIKey:           apiKey,
+		AllowEmptyAPIKey: authOptional,
+		Model:            provider.Model,
+		Timeout:          defaultTimeout(provider.Timeout, 60*time.Second),
+		Observer:         deps.Observer,
 	})
 	if err != nil {
 		return LLMResult{}, err
@@ -157,13 +152,50 @@ func buildOpenAILLM(provider config.LLMProviderConfig, deps Dependencies, client
 	}, nil
 }
 
+func resolveOpenAIAPIKey(provider config.LLMProviderConfig, deps Dependencies) (string, bool, error) {
+	apiKeyReference := credentialReference(provider.APIKeyEnv)
+	authOptional := openAIAuthOptional(provider)
+	if apiKeyReference == "" {
+		if authOptional {
+			return "", true, nil
+		}
+		return "", false, fmt.Errorf("openai-compatible provider requires api_key_env unless options.auth is optional")
+	}
+
+	apiKey, err := resolveCredential(context.Background(), deps.Credentials, apiKeyReference)
+	if err != nil {
+		return "", false, fmt.Errorf("resolve openai api key: %w", err)
+	}
+	return apiKey, authOptional, nil
+}
+
+func credentialReference(reference string) string {
+	cleaned := strings.TrimSpace(reference)
+	if cleaned == "" || strings.Contains(cleaned, ":") {
+		return cleaned
+	}
+	return "env:" + cleaned
+}
+
+var openAIOptionalAuthOptions = map[string]string{
+	"auth":          "optional",
+	"authOptional":  "true",
+	"auth_optional": "true",
+}
+
+func openAIAuthOptional(provider config.LLMProviderConfig) bool {
+	for key, expected := range openAIOptionalAuthOptions {
+		if strings.EqualFold(strings.TrimSpace(provider.Options[key]), expected) {
+			return true
+		}
+	}
+	return false
+}
+
 func buildAnthropicLLM(provider config.LLMProviderConfig, deps Dependencies, clients *LLMClients) (LLMResult, error) {
-	apiKeyReference := strings.TrimSpace(provider.APIKeyEnv)
+	apiKeyReference := credentialReference(provider.APIKeyEnv)
 	if apiKeyReference == "" {
 		return LLMResult{}, fmt.Errorf("anthropic provider requires api_key_env (e.g. env:OBSERVAI_ANTHROPIC_API_KEY)")
-	}
-	if !strings.Contains(apiKeyReference, ":") {
-		apiKeyReference = "env:" + apiKeyReference
 	}
 
 	apiKey, err := resolveCredential(context.Background(), deps.Credentials, apiKeyReference)

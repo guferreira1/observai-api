@@ -56,7 +56,8 @@ func (useCase *LLMConfig) fireReload(ctx context.Context) {
 
 // Create persists a new LLM configuration.
 func (useCase *LLMConfig) Create(ctx context.Context, request LLMConfigRequest) (domain.LLMConfig, error) {
-	if err := useCase.validateRequest(request); err != nil {
+	providerType, err := useCase.validateRequest(request)
+	if err != nil {
 		return domain.LLMConfig{}, err
 	}
 	id, err := useCase.ids.NextID(ctx)
@@ -70,7 +71,7 @@ func (useCase *LLMConfig) Create(ctx context.Context, request LLMConfigRequest) 
 	now := useCase.now().UTC()
 	config := domain.LLMConfig{
 		ID:           id,
-		Type:         request.Type,
+		Type:         providerType,
 		Name:         strings.TrimSpace(request.Name),
 		BaseURL:      strings.TrimSpace(request.BaseURL),
 		Model:        strings.TrimSpace(request.Model),
@@ -117,7 +118,8 @@ func (useCase *LLMConfig) List(ctx context.Context, limit, offset int) ([]domain
 // Update replaces a stored LLM configuration. When request.APIKey is
 // empty the previous ciphertext is preserved.
 func (useCase *LLMConfig) Update(ctx context.Context, id string, request LLMConfigRequest) (domain.LLMConfig, error) {
-	if err := useCase.validateRequest(request); err != nil {
+	providerType, err := useCase.validateRequest(request)
+	if err != nil {
 		return domain.LLMConfig{}, err
 	}
 	current, err := useCase.repository.Find(ctx, id)
@@ -131,7 +133,7 @@ func (useCase *LLMConfig) Update(ctx context.Context, id string, request LLMConf
 			return domain.LLMConfig{}, err
 		}
 	}
-	current.Type = request.Type
+	current.Type = providerType
 	current.Name = strings.TrimSpace(request.Name)
 	current.BaseURL = strings.TrimSpace(request.BaseURL)
 	current.Model = strings.TrimSpace(request.Model)
@@ -204,24 +206,25 @@ func (useCase *LLMConfig) DecryptAPIKey(config domain.LLMConfig) (string, error)
 	return useCase.decryptAPIKey(config.APIKeyCipher)
 }
 
-func (useCase *LLMConfig) validateRequest(request LLMConfigRequest) error {
-	if !domain.IsValidLLMProviderType(request.Type) {
-		return fmt.Errorf("%w: type %q is not supported", domain.ErrInvalidLLMConfig, request.Type)
+func (useCase *LLMConfig) validateRequest(request LLMConfigRequest) (domain.LLMProviderType, error) {
+	providerType, ok := domain.NormalizeLLMProviderType(request.Type)
+	if !ok {
+		return "", fmt.Errorf("%w: type %q is not supported", domain.ErrInvalidLLMConfig, request.Type)
 	}
 	if strings.TrimSpace(request.Name) == "" {
-		return fmt.Errorf("%w: name is required", domain.ErrInvalidLLMConfig)
+		return "", fmt.Errorf("%w: name is required", domain.ErrInvalidLLMConfig)
 	}
 	if strings.TrimSpace(request.Model) == "" {
-		return fmt.Errorf("%w: model is required", domain.ErrInvalidLLMConfig)
+		return "", fmt.Errorf("%w: model is required", domain.ErrInvalidLLMConfig)
 	}
 	parsed, err := url.Parse(strings.TrimSpace(request.BaseURL))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("%w: base url must be absolute http(s)", domain.ErrInvalidLLMConfig)
+		return "", fmt.Errorf("%w: base url must be absolute http(s)", domain.ErrInvalidLLMConfig)
 	}
 	if request.Timeout < 0 {
-		return fmt.Errorf("%w: timeout must be non-negative", domain.ErrInvalidLLMConfig)
+		return "", fmt.Errorf("%w: timeout must be non-negative", domain.ErrInvalidLLMConfig)
 	}
-	return nil
+	return providerType, nil
 }
 
 func (useCase *LLMConfig) encryptAPIKey(plaintext string) (string, error) {

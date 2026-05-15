@@ -1725,7 +1725,7 @@ components:
         id: { type: string }
         type:
           type: string
-          enum: [ollama, openai, anthropic, azure, openrouter]
+          enum: [ollama, openai, openai-compatible, anthropic, azure, openrouter]
         name: { type: string }
         baseUrl: { type: string, format: uri }
         model: { type: string }
