@@ -330,7 +330,7 @@ SQL queries prepared for sqlc live under `internal/adapters/outbound/postgres/qu
 ```yaml
 services:
   observai-api:
-    image: ghcr.io/guferreira1/observai-api:latest
+    image: observai/observai-api:latest
     container_name: observai-api
     ports:
       - "8080:8080"

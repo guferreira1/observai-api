@@ -1,4 +1,5 @@
 name: API CD
+run-name: API CD - ${{ inputs.image_tag }}
 
 "on":
   workflow_dispatch:
@@ -15,6 +16,7 @@ name: API CD
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: api-cd-${{ inputs.image_tag }}
@@ -31,23 +33,66 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate image tag
         shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
         run: |
-          if [[ ! "${{ inputs.image_tag }}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+          if [[ ! "$IMAGE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
             echo "Invalid image tag. Use semantic versioning, for example: v0.1.0 or 0.1.0-alpha.1"
             exit 1
           fi
+          if [[ "$PUBLISH_LATEST" == "true" && "$IMAGE_TAG" == *-* ]]; then
+            echo "Pre-release image tags must not publish latest."
+            exit 1
+          fi
+
+      - name: Generate changelog by GitHub user
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          CHANGELOG_OUTPUT: release-notes.md
+        run: node .github/scripts/changelog-by-user.mjs
+
+      - name: Upload generated changelog
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-release-notes-${{ inputs.image_tag }}
+          path: release-notes.md
+          if-no-files-found: error
 
       - name: Set Docker tags
         id: tags
         shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
         run: |
+          semver='^v?([0-9]+)\.([0-9]+)\.([0-9]+)(-[A-Za-z0-9.-]+)?$'
+          if [[ ! "$IMAGE_TAG" =~ $semver ]]; then
+            echo "Invalid image tag. Use semantic versioning, for example: v0.1.0 or 0.1.0-alpha.1"
+            exit 1
+          fi
+
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          prerelease="${BASH_REMATCH[4]}"
+          prefix=""
+          if [[ "$IMAGE_TAG" == v* ]]; then
+            prefix="v"
+          fi
+
           {
             echo "tags<<EOF"
-            echo "${IMAGE_NAME}:${{ inputs.image_tag }}"
-            if [ "${{ inputs.publish_latest }}" = "true" ]; then
+            echo "${IMAGE_NAME}:${IMAGE_TAG}"
+            if [ -z "$prerelease" ]; then
+              echo "${IMAGE_NAME}:${prefix}${major}.${minor}"
+            fi
+            if [ "$PUBLISH_LATEST" = "true" ]; then
               echo "${IMAGE_NAME}:latest"
             fi
             echo "EOF"

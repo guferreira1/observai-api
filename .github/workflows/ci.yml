@@ -1,4 +1,5 @@
 name: API CI
+run-name: API CI - ${{ github.ref_name }}
 
 "on":
   push:
@@ -18,6 +19,7 @@ concurrency:
 
 env:
   OBSERVAI_TEST_DATABASE_DSN: postgres://observai:observai@localhost:5432/observai?sslmode=disable
+  OBSERVAI_TEST_REDIS_URL: redis://localhost:6379/0
 
 jobs:
   validate:
@@ -35,6 +37,15 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U observai -d observai"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -101,6 +112,11 @@ jobs:
         run: |
           migrate -path migrations -database "$OBSERVAI_TEST_DATABASE_DSN" up
           go test ./... -race -count=1 -coverprofile=coverage.out
+
+      - name: HTTP integration tests
+        env:
+          OBSERVAI_TEST_TESTCONTAINERS: "1"
+        run: go test -tags=integration ./internal/adapters/inbound/http -count=1 -run Integration
 
       - name: Upload coverage artifact
         if: always()
