@@ -2,10 +2,10 @@ package http
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	stdhttp "net/http"
 	"strings"
+	"time"
 
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/ports"
@@ -46,12 +46,15 @@ type authContextKey struct{}
 
 // AuthPrincipal carries the resolved authentication data for the request.
 type AuthPrincipal struct {
-	Source AuthSource
-	KeyID  string
-	UserID string
-	Name   string
-	Scopes []domain.APIKeyScope
-	Role   domain.Role
+	Source           AuthSource
+	KeyID            string
+	UserID           string
+	Name             string
+	Scopes           []domain.APIKeyScope
+	Role             domain.Role
+	SessionID        string
+	SessionIssuedAt  time.Time
+	SessionExpiresAt time.Time
 }
 
 // HasScope reports whether the principal carries the supplied scope value.
@@ -143,7 +146,7 @@ const CSRFCookieName = "oai_csrf"
 // persisted API keys. Operational endpoints listed in Skip bypass
 // authentication entirely. When no credential source is configured the
 // middleware is a no-op so local development runs without secrets.
-func authMiddleware(config AuthConfig) func(stdhttp.Handler) stdhttp.Handler {
+func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(stdhttp.Handler) stdhttp.Handler {
 	staticKeys := indexKeys(config.StaticKeys)
 	adminKeys := indexKeys(config.AdminKeys)
 	skip := indexSkipPaths(config.Skip)
@@ -164,7 +167,7 @@ func authMiddleware(config AuthConfig) func(stdhttp.Handler) stdhttp.Handler {
 				next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), openPrincipal)))
 				return
 			}
-			if skip[request.URL.Path] {
+			if shouldSkipAuthentication(request.URL.Path, skip) {
 				next.ServeHTTP(writer, request)
 				return
 			}
@@ -179,7 +182,7 @@ func authMiddleware(config AuthConfig) func(stdhttp.Handler) stdhttp.Handler {
 			if apiKeyEnabled {
 				token, ok := bearerToken(request.Header.Get("Authorization"))
 				if !ok {
-					writeUnauthorized(writer)
+					writeUnauthorized(writer, request, provider)
 					return
 				}
 
@@ -188,7 +191,7 @@ func authMiddleware(config AuthConfig) func(stdhttp.Handler) stdhttp.Handler {
 					persisted, err := config.APIKeys.Resolve(request.Context(), token)
 					if err != nil {
 						if !errors.Is(err, domain.ErrAPIKeyNotFound) {
-							writeUnauthorized(writer)
+							writeUnauthorized(writer, request, provider)
 							return
 						}
 					} else {
@@ -202,14 +205,14 @@ func authMiddleware(config AuthConfig) func(stdhttp.Handler) stdhttp.Handler {
 					}
 				}
 				if !ok {
-					writeUnauthorized(writer)
+					writeUnauthorized(writer, request, provider)
 					return
 				}
 				next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), principal)))
 				return
 			}
 
-			writeUnauthorized(writer)
+			writeUnauthorized(writer, request, provider)
 		})
 	}
 }
@@ -232,10 +235,13 @@ func resolveCookie(request *stdhttp.Request, signer *crypto.JWTSigner, users por
 		return AuthPrincipal{}, false
 	}
 	return AuthPrincipal{
-		Source: AuthSourceUser,
-		UserID: user.ID,
-		Name:   user.Email,
-		Role:   role,
+		Source:           AuthSourceUser,
+		UserID:           user.ID,
+		Name:             user.Email,
+		Role:             role,
+		SessionID:        claims.JTI,
+		SessionIssuedAt:  claims.IssuedAt,
+		SessionExpiresAt: claims.ExpiresAt,
 	}, true
 }
 
@@ -256,7 +262,7 @@ func RequireRole(roles ...domain.Role) func(stdhttp.HandlerFunc) stdhttp.Handler
 		return func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			principal, ok := PrincipalFromContext(request.Context())
 			if !ok || !allowed[principal.EffectiveRole()] {
-				writeForbidden(writer)
+				writeForbidden(writer, request, nil)
 				return
 			}
 			next(writer, request)
@@ -271,12 +277,12 @@ func RequireScope(scopes ...domain.APIKeyScope) func(stdhttp.HandlerFunc) stdhtt
 		return func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			principal, ok := PrincipalFromContext(request.Context())
 			if !ok {
-				writeForbidden(writer)
+				writeForbidden(writer, request, nil)
 				return
 			}
 			for _, scope := range scopes {
 				if !principal.HasScope(scope) {
-					writeForbidden(writer)
+					writeForbidden(writer, request, nil)
 					return
 				}
 			}
@@ -333,7 +339,7 @@ func indexKeys(values []string) map[string]bool {
 func indexSkipPaths(values []string) map[string]bool {
 	defaults := []string{
 		"/health", "/healthz", "/readyz", "/metrics",
-		"/v1/openapi.yaml",
+		openAPIYAMLRoutePath, swaggerUIRoutePath, swaggerUIAliasPath,
 		"/v1/auth/login", "/v1/auth/refresh",
 		"/v1/setup/status", "/v1/setup/admin",
 	}
@@ -350,19 +356,27 @@ func indexSkipPaths(values []string) map[string]bool {
 	return index
 }
 
-func writeUnauthorized(writer stdhttp.ResponseWriter) {
-	writeAuthFailure(writer, stdhttp.StatusUnauthorized, "unauthorized", "missing or invalid credentials")
+func shouldSkipAuthentication(requestPath string, exactSkipPaths map[string]bool) bool {
+	return exactSkipPaths[requestPath] ||
+		strings.HasPrefix(requestPath, swaggerUIBasePath) ||
+		strings.HasPrefix(requestPath, swaggerUIAliasBasePath)
 }
 
-func writeForbidden(writer stdhttp.ResponseWriter) {
-	writeAuthFailure(writer, stdhttp.StatusForbidden, "forbidden", "insufficient privileges")
+func writeUnauthorized(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider) {
+	writeAuthFailure(writer, request, provider, stdhttp.StatusUnauthorized, "unauthorized", "missing or invalid credentials")
 }
 
-func writeAuthFailure(writer stdhttp.ResponseWriter, status int, code, message string) {
-	payload := WrapperDtoResponde[ErrorResponse]{
-		Data: ErrorResponse{Code: code, Message: message},
+func writeForbidden(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider) {
+	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges")
+}
+
+func writeAuthFailure(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, status int, code, message string) {
+	requestID := ""
+	if request != nil {
+		requestID = requestIDFromContext(request.Context())
 	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(payload)
+	writeMiddlewareErrorResponse(writer, requestID, status, "", ErrorResponse{
+		Code:    code,
+		Message: message,
+	}, middlewareProviderSummary(provider))
 }

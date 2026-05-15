@@ -23,7 +23,7 @@ var safeHTTPMethods = map[string]bool{
 // browser-attached cookies. For protected requests, the X-CSRF-Token header
 // must match the oai_csrf cookie value using a constant-time comparison so
 // the check does not leak through timing.
-func csrfMiddleware() func(stdhttp.Handler) stdhttp.Handler {
+func csrfMiddleware(provider providerSummaryProvider) func(stdhttp.Handler) stdhttp.Handler {
 	return func(next stdhttp.Handler) stdhttp.Handler {
 		return stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			if safeHTTPMethods[request.Method] {
@@ -38,11 +38,11 @@ func csrfMiddleware() func(stdhttp.Handler) stdhttp.Handler {
 			cookie, err := request.Cookie(CSRFCookieName)
 			header := request.Header.Get(CSRFHeaderName)
 			if err != nil || cookie.Value == "" || header == "" {
-				writeCSRFFailure(writer)
+				writeCSRFFailure(writer, request, provider)
 				return
 			}
 			if subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(header)) != 1 {
-				writeCSRFFailure(writer)
+				writeCSRFFailure(writer, request, provider)
 				return
 			}
 			next.ServeHTTP(writer, request)
@@ -50,6 +50,6 @@ func csrfMiddleware() func(stdhttp.Handler) stdhttp.Handler {
 	}
 }
 
-func writeCSRFFailure(writer stdhttp.ResponseWriter) {
-	writeAuthFailure(writer, stdhttp.StatusForbidden, "csrf_token_invalid", "csrf token missing or invalid")
+func writeCSRFFailure(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider) {
+	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "csrf_token_invalid", "csrf token missing or invalid")
 }

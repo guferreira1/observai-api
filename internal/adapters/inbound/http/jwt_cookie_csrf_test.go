@@ -54,7 +54,7 @@ func issueAccessToken(t *testing.T, signer *crypto.JWTSigner, user domain.User) 
 func TestAuthMiddlewareAcceptsValidJWTCookie(t *testing.T) {
 	signer, users, user := newJWTFixture(t)
 	captured := AuthPrincipal{}
-	handler := authMiddleware(AuthConfig{Signer: signer, Users: users})(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	handler := authMiddleware(AuthConfig{Signer: signer, Users: users}, nil)(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 		principal, _ := PrincipalFromContext(request.Context())
 		captured = principal
 		writer.WriteHeader(stdhttp.StatusOK)
@@ -83,7 +83,7 @@ func TestAuthMiddlewareRejectsExpiredJWTCookie(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign expired token: %v", err)
 	}
-	handler := authMiddleware(AuthConfig{Signer: signer, Users: users})(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+	handler := authMiddleware(AuthConfig{Signer: signer, Users: users}, nil)(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		writer.WriteHeader(stdhttp.StatusOK)
 	}))
 
@@ -101,7 +101,7 @@ func TestAuthMiddlewareRejectsInactiveUserCookie(t *testing.T) {
 	if err := users.SetActive(context.Background(), user.ID, false, time.Now().UTC()); err != nil {
 		t.Fatalf("deactivate user: %v", err)
 	}
-	handler := authMiddleware(AuthConfig{Signer: signer, Users: users})(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+	handler := authMiddleware(AuthConfig{Signer: signer, Users: users}, nil)(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		writer.WriteHeader(stdhttp.StatusOK)
 	}))
 
@@ -142,7 +142,7 @@ func TestRequireRoleRejectsMismatchedRole(t *testing.T) {
 
 func TestCSRFMiddlewareEnforcesDoubleSubmitOnMutations(t *testing.T) {
 	called := false
-	handler := csrfMiddleware()(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+	handler := csrfMiddleware(nil)(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		called = true
 		writer.WriteHeader(stdhttp.StatusOK)
 	}))
@@ -159,7 +159,7 @@ func TestCSRFMiddlewareEnforcesDoubleSubmitOnMutations(t *testing.T) {
 }
 
 func TestCSRFMiddlewareRejectsMissingHeader(t *testing.T) {
-	handler := csrfMiddleware()(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+	handler := csrfMiddleware(nil)(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		writer.WriteHeader(stdhttp.StatusOK)
 	}))
 	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", nil)
@@ -173,7 +173,7 @@ func TestCSRFMiddlewareRejectsMissingHeader(t *testing.T) {
 }
 
 func TestCSRFMiddlewareRejectsMismatchedTokens(t *testing.T) {
-	handler := csrfMiddleware()(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+	handler := csrfMiddleware(nil)(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		writer.WriteHeader(stdhttp.StatusOK)
 	}))
 	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", nil)
@@ -188,7 +188,7 @@ func TestCSRFMiddlewareRejectsMismatchedTokens(t *testing.T) {
 }
 
 func TestCSRFMiddlewareSkipsAPIKeyAuth(t *testing.T) {
-	handler := csrfMiddleware()(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+	handler := csrfMiddleware(nil)(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		writer.WriteHeader(stdhttp.StatusOK)
 	}))
 	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", nil)
@@ -201,7 +201,7 @@ func TestCSRFMiddlewareSkipsAPIKeyAuth(t *testing.T) {
 }
 
 func TestCSRFMiddlewareBypassesSafeMethods(t *testing.T) {
-	handler := csrfMiddleware()(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+	handler := csrfMiddleware(nil)(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
 		writer.WriteHeader(stdhttp.StatusOK)
 	}))
 	for _, method := range []string{stdhttp.MethodGet, stdhttp.MethodHead, stdhttp.MethodOptions} {

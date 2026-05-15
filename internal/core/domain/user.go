@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -52,14 +53,53 @@ func IsValidRole(role Role) bool {
 // PasswordHash is never returned to clients. The HTTP layer projects User
 // onto a transport DTO that omits sensitive fields.
 type User struct {
-	ID           string
-	Email        string
-	PasswordHash string
-	Role         Role
-	IsActive     bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	LastLoginAt  *time.Time
+	ID                 string
+	Email              string
+	PasswordHash       string
+	Role               Role
+	IsActive           bool
+	MustChangePassword bool
+	Preferences        UserPreferences
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	LastLoginAt        *time.Time
+}
+
+// UserPreferences stores user-owned UI preferences that are safe to expose
+// through /v1/me/preferences.
+type UserPreferences struct {
+	Locale    string `json:"locale"`
+	Timezone  string `json:"timezone"`
+	Theme     string `json:"theme"`
+	DenseMode bool   `json:"denseMode"`
+}
+
+// NormalizeUserPreferences applies stable defaults and drops unsupported values.
+func NormalizeUserPreferences(preferences UserPreferences) UserPreferences {
+	normalized := UserPreferences{
+		Locale:    normalizePreferenceValue(preferences.Locale, "en-US"),
+		Timezone:  normalizePreferenceValue(preferences.Timezone, "UTC"),
+		Theme:     normalizeTheme(preferences.Theme),
+		DenseMode: preferences.DenseMode,
+	}
+	return normalized
+}
+
+func normalizePreferenceValue(value string, fallback string) string {
+	cleaned := strings.TrimSpace(value)
+	if cleaned == "" {
+		return fallback
+	}
+	return cleaned
+}
+
+func normalizeTheme(value string) string {
+	switch strings.TrimSpace(value) {
+	case "light", "dark", "system":
+		return value
+	default:
+		return "system"
+	}
 }
 
 // RefreshToken describes a persisted refresh credential.

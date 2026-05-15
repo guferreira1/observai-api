@@ -13,6 +13,7 @@ type WebhookRepository interface {
 	Find(ctx context.Context, id string) (domain.Webhook, error)
 	List(ctx context.Context, limit int, offset int) ([]domain.Webhook, error)
 	ListActive(ctx context.Context, event string) ([]domain.Webhook, error)
+	Update(ctx context.Context, webhook domain.Webhook) error
 	Disable(ctx context.Context, id string) error
 }
 

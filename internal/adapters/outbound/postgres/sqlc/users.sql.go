@@ -23,18 +23,20 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 }
 
 const createUser = `-- name: CreateUser :exec
-INSERT INTO users (id, email, password_hash, role, is_active, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO users (id, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type CreateUserParams struct {
-	ID           string             `json:"id"`
-	Email        string             `json:"email"`
-	PasswordHash string             `json:"password_hash"`
-	Role         string             `json:"role"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                 string             `json:"id"`
+	Email              string             `json:"email"`
+	PasswordHash       string             `json:"password_hash"`
+	Role               string             `json:"role"`
+	IsActive           bool               `json:"is_active"`
+	MustChangePassword bool               `json:"must_change_password"`
+	Preferences        []byte             `json:"preferences"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) error {
@@ -44,6 +46,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) error {
 		arg.PasswordHash,
 		arg.Role,
 		arg.IsActive,
+		arg.MustChangePassword,
+		arg.Preferences,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -61,20 +65,35 @@ func (q *Queries) DeleteUser(ctx context.Context, id string) error {
 }
 
 const findUserByEmail = `-- name: FindUserByEmail :one
-SELECT id, email, password_hash, role, is_active, created_at, updated_at, last_login_at
+SELECT id, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at, last_login_at
 FROM users
 WHERE email = $1
 `
 
-func (q *Queries) FindUserByEmail(ctx context.Context, email string) (User, error) {
+type FindUserByEmailRow struct {
+	ID                 string             `json:"id"`
+	Email              string             `json:"email"`
+	PasswordHash       string             `json:"password_hash"`
+	Role               string             `json:"role"`
+	IsActive           bool               `json:"is_active"`
+	MustChangePassword bool               `json:"must_change_password"`
+	Preferences        []byte             `json:"preferences"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	LastLoginAt        pgtype.Timestamptz `json:"last_login_at"`
+}
+
+func (q *Queries) FindUserByEmail(ctx context.Context, email string) (FindUserByEmailRow, error) {
 	row := q.db.QueryRow(ctx, findUserByEmail, email)
-	var i User
+	var i FindUserByEmailRow
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
 		&i.PasswordHash,
 		&i.Role,
 		&i.IsActive,
+		&i.MustChangePassword,
+		&i.Preferences,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastLoginAt,
@@ -83,20 +102,35 @@ func (q *Queries) FindUserByEmail(ctx context.Context, email string) (User, erro
 }
 
 const findUserByID = `-- name: FindUserByID :one
-SELECT id, email, password_hash, role, is_active, created_at, updated_at, last_login_at
+SELECT id, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at, last_login_at
 FROM users
 WHERE id = $1
 `
 
-func (q *Queries) FindUserByID(ctx context.Context, id string) (User, error) {
+type FindUserByIDRow struct {
+	ID                 string             `json:"id"`
+	Email              string             `json:"email"`
+	PasswordHash       string             `json:"password_hash"`
+	Role               string             `json:"role"`
+	IsActive           bool               `json:"is_active"`
+	MustChangePassword bool               `json:"must_change_password"`
+	Preferences        []byte             `json:"preferences"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	LastLoginAt        pgtype.Timestamptz `json:"last_login_at"`
+}
+
+func (q *Queries) FindUserByID(ctx context.Context, id string) (FindUserByIDRow, error) {
 	row := q.db.QueryRow(ctx, findUserByID, id)
-	var i User
+	var i FindUserByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
 		&i.PasswordHash,
 		&i.Role,
 		&i.IsActive,
+		&i.MustChangePassword,
+		&i.Preferences,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastLoginAt,
@@ -105,7 +139,7 @@ func (q *Queries) FindUserByID(ctx context.Context, id string) (User, error) {
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, email, password_hash, role, is_active, created_at, updated_at, last_login_at
+SELECT id, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at, last_login_at
 FROM users
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $1
@@ -116,21 +150,36 @@ type ListUsersParams struct {
 	ResultLimit  int32 `json:"result_limit"`
 }
 
-func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]User, error) {
+type ListUsersRow struct {
+	ID                 string             `json:"id"`
+	Email              string             `json:"email"`
+	PasswordHash       string             `json:"password_hash"`
+	Role               string             `json:"role"`
+	IsActive           bool               `json:"is_active"`
+	MustChangePassword bool               `json:"must_change_password"`
+	Preferences        []byte             `json:"preferences"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	LastLoginAt        pgtype.Timestamptz `json:"last_login_at"`
+}
+
+func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUsersRow, error) {
 	rows, err := q.db.Query(ctx, listUsers, arg.ResultOffset, arg.ResultLimit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []User{}
+	items := []ListUsersRow{}
 	for rows.Next() {
-		var i User
+		var i ListUsersRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Email,
 			&i.PasswordHash,
 			&i.Role,
 			&i.IsActive,
+			&i.MustChangePassword,
+			&i.Preferences,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.LastLoginAt,
@@ -162,6 +211,23 @@ func (q *Queries) SetUserActive(ctx context.Context, arg SetUserActiveParams) er
 	return err
 }
 
+const setUserMustChangePassword = `-- name: SetUserMustChangePassword :exec
+UPDATE users
+SET must_change_password = $1, updated_at = $2
+WHERE id = $3
+`
+
+type SetUserMustChangePasswordParams struct {
+	MustChangePassword bool               `json:"must_change_password"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	ID                 string             `json:"id"`
+}
+
+func (q *Queries) SetUserMustChangePassword(ctx context.Context, arg SetUserMustChangePasswordParams) error {
+	_, err := q.db.Exec(ctx, setUserMustChangePassword, arg.MustChangePassword, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const touchUserLastLogin = `-- name: TouchUserLastLogin :exec
 UPDATE users
 SET last_login_at = $1, updated_at = $2
@@ -181,7 +247,7 @@ func (q *Queries) TouchUserLastLogin(ctx context.Context, arg TouchUserLastLogin
 
 const updateUserPassword = `-- name: UpdateUserPassword :exec
 UPDATE users
-SET password_hash = $1, updated_at = $2
+SET password_hash = $1, must_change_password = false, updated_at = $2
 WHERE id = $3
 `
 
@@ -193,6 +259,23 @@ type UpdateUserPasswordParams struct {
 
 func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error {
 	_, err := q.db.Exec(ctx, updateUserPassword, arg.PasswordHash, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const updateUserPreferences = `-- name: UpdateUserPreferences :exec
+UPDATE users
+SET preferences = $1, updated_at = $2
+WHERE id = $3
+`
+
+type UpdateUserPreferencesParams struct {
+	Preferences []byte             `json:"preferences"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID          string             `json:"id"`
+}
+
+func (q *Queries) UpdateUserPreferences(ctx context.Context, arg UpdateUserPreferencesParams) error {
+	_, err := q.db.Exec(ctx, updateUserPreferences, arg.Preferences, arg.UpdatedAt, arg.ID)
 	return err
 }
 

@@ -107,6 +107,10 @@ func (router *Router) handleRetryWebhookDelivery(writer stdhttp.ResponseWriter, 
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusAccepted, toWebhookDeliveryDto(delivery))
 }
 
+func (router *Router) handleReplayWebhookDelivery(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	router.handleRetryWebhookDelivery(writer, request)
+}
+
 func (router *Router) writeWebhookError(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, err error) {
 	switch {
 	case errors.Is(err, domain.ErrWebhookNotFound):

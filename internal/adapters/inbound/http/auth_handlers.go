@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/guferreira1/observai-api/internal/core/domain"
+	"github.com/guferreira1/observai-api/internal/core/policy"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 )
 
@@ -38,6 +39,14 @@ type UpdateProfileRequestDto struct {
 	Email string `json:"email" validate:"required,email"`
 }
 
+// UpdatePreferencesRequestDto is the payload accepted by PATCH /v1/me/preferences.
+type UpdatePreferencesRequestDto struct {
+	Locale    *string `json:"locale,omitempty"`
+	Timezone  *string `json:"timezone,omitempty"`
+	Theme     *string `json:"theme,omitempty" validate:"omitempty,oneof=light dark system"`
+	DenseMode *bool   `json:"denseMode,omitempty"`
+}
+
 // ChangePasswordRequestDto is the payload accepted by POST /v1/me/password.
 type ChangePasswordRequestDto struct {
 	CurrentPassword string `json:"currentPassword" validate:"required"`
@@ -46,26 +55,56 @@ type ChangePasswordRequestDto struct {
 
 // CreateUserRequestDto is the payload accepted by POST /v1/admin/users.
 type CreateUserRequestDto struct {
-	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required,min=8"`
-	Role     string `json:"role" validate:"required,oneof=admin operator viewer"`
+	Email              string `json:"email" validate:"required,email"`
+	Password           string `json:"password" validate:"required,min=8"`
+	Role               string `json:"role" validate:"required,oneof=admin operator viewer"`
+	MustChangePassword bool   `json:"mustChangePassword,omitempty"`
 }
 
 // UpdateUserRequestDto is the payload accepted by PATCH /v1/admin/users/{id}.
 type UpdateUserRequestDto struct {
-	Role     *string `json:"role,omitempty" validate:"omitempty,oneof=admin operator viewer"`
-	IsActive *bool   `json:"isActive,omitempty"`
+	Role               *string `json:"role,omitempty" validate:"omitempty,oneof=admin operator viewer"`
+	IsActive           *bool   `json:"isActive,omitempty"`
+	MustChangePassword *bool   `json:"mustChangePassword,omitempty"`
 }
 
 // UserResponseDto is the public projection of a domain.User.
 type UserResponseDto struct {
-	ID          string  `json:"id"`
-	Email       string  `json:"email"`
-	Role        string  `json:"role"`
-	IsActive    bool    `json:"isActive"`
-	CreatedAt   string  `json:"createdAt"`
-	UpdatedAt   string  `json:"updatedAt"`
-	LastLoginAt *string `json:"lastLoginAt,omitempty"`
+	ID                 string         `json:"id"`
+	Email              string         `json:"email"`
+	Role               string         `json:"role"`
+	IsActive           bool           `json:"isActive"`
+	MustChangePassword bool           `json:"mustChangePassword"`
+	Preferences        PreferencesDto `json:"preferences"`
+	CreatedAt          string         `json:"createdAt"`
+	UpdatedAt          string         `json:"updatedAt"`
+	LastLoginAt        *string        `json:"lastLoginAt,omitempty"`
+}
+
+// PreferencesDto is the frontend-safe projection of user preferences.
+type PreferencesDto struct {
+	Locale    string `json:"locale"`
+	Timezone  string `json:"timezone"`
+	Theme     string `json:"theme"`
+	DenseMode bool   `json:"denseMode"`
+}
+
+// MySessionsResponseDto lists sessions visible to the current user.
+type MySessionsResponseDto struct {
+	Items []MySessionDto `json:"items"`
+}
+
+// MySessionDto describes the current access-token-backed browser session.
+type MySessionDto struct {
+	ID        string `json:"id"`
+	Current   bool   `json:"current"`
+	IssuedAt  string `json:"issuedAt,omitempty"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
+}
+
+// MyKeysResponseDto lists API keys visible from the current credential.
+type MyKeysResponseDto struct {
+	Items []APIKeyDto `json:"items"`
 }
 
 // SessionResponseDto is returned by POST /v1/auth/login and /v1/auth/refresh.
@@ -81,18 +120,39 @@ type SessionResponseDto struct {
 
 func toUserResponseDto(user domain.User) UserResponseDto {
 	dto := UserResponseDto{
-		ID:        user.ID,
-		Email:     user.Email,
-		Role:      string(user.Role),
-		IsActive:  user.IsActive,
-		CreatedAt: user.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
+		ID:                 user.ID,
+		Email:              user.Email,
+		Role:               string(user.Role),
+		IsActive:           user.IsActive,
+		MustChangePassword: user.MustChangePassword,
+		Preferences:        toPreferencesDto(user.Preferences),
+		CreatedAt:          user.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:          user.UpdatedAt.Format(time.RFC3339),
 	}
 	if user.LastLoginAt != nil {
 		last := user.LastLoginAt.Format(time.RFC3339)
 		dto.LastLoginAt = &last
 	}
 	return dto
+}
+
+func toPreferencesDto(preferences domain.UserPreferences) PreferencesDto {
+	normalized := domain.NormalizeUserPreferences(preferences)
+	return PreferencesDto{
+		Locale:    normalized.Locale,
+		Timezone:  normalized.Timezone,
+		Theme:     normalized.Theme,
+		DenseMode: normalized.DenseMode,
+	}
+}
+
+func toDomainPreferences(dto PreferencesDto) domain.UserPreferences {
+	return domain.UserPreferences{
+		Locale:    dto.Locale,
+		Timezone:  dto.Timezone,
+		Theme:     dto.Theme,
+		DenseMode: dto.DenseMode,
+	}
 }
 
 func (router *Router) handleLogin(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -264,6 +324,120 @@ func (router *Router) handleChangePassword(writer stdhttp.ResponseWriter, reques
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
 }
 
+func (router *Router) handleGetPreferences(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	principal, ok := PrincipalFromContext(request.Context())
+	if !ok || principal.Source != AuthSourceUser {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusForbidden, "forbidden", "user session required")
+		return
+	}
+	user, err := router.sessions.Me(request.Context(), principal.UserID)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toPreferencesDto(user.Preferences))
+}
+
+func (router *Router) handleUpdatePreferences(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	principal, ok := PrincipalFromContext(request.Context())
+	if !ok || principal.Source != AuthSourceUser {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusForbidden, "forbidden", "user session required")
+		return
+	}
+
+	var dto UpdatePreferencesRequestDto
+	if err := decodeRequestBody(request, &dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	if err := router.validate.Struct(dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	current, err := router.sessions.Me(request.Context(), principal.UserID)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	updated := mergePreferences(toPreferencesDto(current.Preferences), dto)
+	user, err := router.sessions.UpdatePreferences(request.Context(), principal.UserID, toDomainPreferences(updated))
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toPreferencesDto(user.Preferences))
+}
+
+func mergePreferences(current PreferencesDto, update UpdatePreferencesRequestDto) PreferencesDto {
+	applyOptionalString(&current.Locale, update.Locale)
+	applyOptionalString(&current.Timezone, update.Timezone)
+	applyOptionalString(&current.Theme, update.Theme)
+	applyOptionalBool(&current.DenseMode, update.DenseMode)
+	return toPreferencesDto(toDomainPreferences(current))
+}
+
+func applyOptionalString(target *string, value *string) {
+	if value != nil {
+		*target = *value
+	}
+}
+
+func applyOptionalBool(target *bool, value *bool) {
+	if value != nil {
+		*target = *value
+	}
+}
+
+func (router *Router) handleListSessions(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	principal, ok := PrincipalFromContext(request.Context())
+	if !ok || principal.Source != AuthSourceUser {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusForbidden, "forbidden", "user session required")
+		return
+	}
+	session := MySessionDto{
+		ID:      principal.SessionID,
+		Current: true,
+	}
+	if !principal.SessionIssuedAt.IsZero() {
+		session.IssuedAt = principal.SessionIssuedAt.Format(time.RFC3339)
+	}
+	if !principal.SessionExpiresAt.IsZero() {
+		session.ExpiresAt = principal.SessionExpiresAt.Format(time.RFC3339)
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, MySessionsResponseDto{Items: []MySessionDto{session}})
+}
+
+func (router *Router) handleListMyKeys(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	principal, ok := PrincipalFromContext(request.Context())
+	if !ok {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusForbidden, "forbidden", "authenticated principal required")
+		return
+	}
+	if principal.Source != AuthSourceAPIKey || principal.KeyID == "" {
+		router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, MyKeysResponseDto{Items: []APIKeyDto{}})
+		return
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, MyKeysResponseDto{Items: []APIKeyDto{{
+		ID:     principal.KeyID,
+		Name:   principal.Name,
+		Scopes: scopesToStrings(principal.Scopes),
+		Masked: policy.MaskSecret("oai_" + principal.KeyID),
+	}}})
+}
+
 func (router *Router) handleListUsers(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 	startedAt := time.Now()
 	requestID := router.requestID(request)
@@ -295,7 +469,12 @@ func (router *Router) handleCreateUser(writer stdhttp.ResponseWriter, request *s
 		return
 	}
 
-	user, err := router.users.Create(request.Context(), dto.Email, dto.Password, domain.Role(dto.Role))
+	user, err := router.users.CreateWithOptions(request.Context(), usecase.UserCreateRequest{
+		Email:              dto.Email,
+		Password:           dto.Password,
+		Role:               domain.Role(dto.Role),
+		MustChangePassword: dto.MustChangePassword,
+	})
 	if err != nil {
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
@@ -363,6 +542,12 @@ func (router *Router) applyUserUpdate(request *stdhttp.Request, id string, dto U
 	}
 	if dto.IsActive != nil && *dto.IsActive != current.IsActive {
 		current, err = router.users.SetActive(request.Context(), id, *dto.IsActive)
+		if err != nil {
+			return domain.User{}, err
+		}
+	}
+	if dto.MustChangePassword != nil && *dto.MustChangePassword != current.MustChangePassword {
+		current, err = router.users.SetMustChangePassword(request.Context(), id, *dto.MustChangePassword)
 		if err != nil {
 			return domain.User{}, err
 		}

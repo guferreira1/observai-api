@@ -15,9 +15,11 @@ type UserRepository interface {
 	List(ctx context.Context, limit int, offset int) ([]domain.User, error)
 	Count(ctx context.Context) (int64, error)
 	UpdateProfile(ctx context.Context, id string, email string, updatedAt time.Time) error
+	UpdatePreferences(ctx context.Context, id string, preferences domain.UserPreferences, updatedAt time.Time) error
 	UpdatePassword(ctx context.Context, id string, passwordHash string, updatedAt time.Time) error
 	UpdateRole(ctx context.Context, id string, role domain.Role, updatedAt time.Time) error
 	SetActive(ctx context.Context, id string, active bool, updatedAt time.Time) error
+	SetMustChangePassword(ctx context.Context, id string, mustChangePassword bool, updatedAt time.Time) error
 	TouchLastLogin(ctx context.Context, id string, when time.Time) error
 	Delete(ctx context.Context, id string) error
 }

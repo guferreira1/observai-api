@@ -18,6 +18,7 @@ sql:
       - migrations/000014_create_llm_configurations.up.sql
       - migrations/000015_create_webhook_deliveries.up.sql
       - migrations/000016_extend_audit_log.up.sql
+      - migrations/000017_extend_users_preferences.up.sql
     queries:
       - internal/adapters/outbound/postgres/query
     gen:

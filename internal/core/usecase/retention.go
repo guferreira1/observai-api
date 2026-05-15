@@ -23,6 +23,13 @@ type AnalysisRetention struct {
 	now        func() time.Time
 }
 
+// RetentionPreview describes how many analyses a retention action would delete.
+type RetentionPreview struct {
+	WouldDelete int
+	Cutoff      time.Time
+	KeepNewest  int
+}
+
 // NewAnalysisRetention creates a retention use case.
 func NewAnalysisRetention(repository ports.AnalysisRetention) *AnalysisRetention {
 	return &AnalysisRetention{repository: repository, now: time.Now}
@@ -58,6 +65,19 @@ func (useCase *AnalysisRetention) Purge(ctx context.Context, age time.Duration) 
 	return affected, nil
 }
 
+// PreviewPurge returns the number of analyses older than now-age without deleting them.
+func (useCase *AnalysisRetention) PreviewPurge(ctx context.Context, age time.Duration) (RetentionPreview, error) {
+	if age <= 0 {
+		return RetentionPreview{}, fmt.Errorf("retention age must be positive")
+	}
+	cutoff := useCase.now().UTC().Add(-age)
+	count, err := useCase.repository.CountOlderThan(ctx, cutoff)
+	if err != nil {
+		return RetentionPreview{}, fmt.Errorf("preview purge analyses: %w", err)
+	}
+	return RetentionPreview{WouldDelete: count, Cutoff: cutoff}, nil
+}
+
 // PurgeByQuantity preserves the supplied number of newest analyses and
 // removes the rest. The keep argument must be positive; the repository
 // implements the truncation using `OFFSET keep` so the deletion is a
@@ -71,4 +91,16 @@ func (useCase *AnalysisRetention) PurgeByQuantity(ctx context.Context, keep int)
 		return 0, fmt.Errorf("purge analyses keeping newest: %w", err)
 	}
 	return affected, nil
+}
+
+// PreviewPurgeByQuantity returns how many analyses exceed the newest keep count.
+func (useCase *AnalysisRetention) PreviewPurgeByQuantity(ctx context.Context, keep int) (RetentionPreview, error) {
+	if keep <= 0 {
+		return RetentionPreview{}, fmt.Errorf("retention quantity must be positive")
+	}
+	count, err := useCase.repository.CountExceedingNewest(ctx, keep)
+	if err != nil {
+		return RetentionPreview{}, fmt.Errorf("preview purge analyses keeping newest: %w", err)
+	}
+	return RetentionPreview{WouldDelete: count, KeepNewest: keep}, nil
 }

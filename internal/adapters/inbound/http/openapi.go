@@ -5,6 +5,14 @@ import (
 	stdhttp "net/http"
 )
 
+const (
+	openAPIYAMLRoutePath   = "/v1/openapi.yaml"
+	swaggerUIRoutePath     = "/docs"
+	swaggerUIBasePath      = swaggerUIRoutePath + "/"
+	swaggerUIAliasPath     = "/swagger"
+	swaggerUIAliasBasePath = swaggerUIAliasPath + "/"
+)
+
 //go:embed openapi.yaml
 var openAPIDocument []byte
 

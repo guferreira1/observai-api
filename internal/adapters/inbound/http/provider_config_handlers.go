@@ -75,6 +75,7 @@ type LLMConfigResponseDto struct {
 type TestConnectionResponseDto struct {
 	Reached   bool   `json:"reached"`
 	LatencyMs int64  `json:"latencyMs"`
+	Code      string `json:"code,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 
@@ -293,6 +294,7 @@ func (router *Router) handleTestProviderConfig(writer stdhttp.ResponseWriter, re
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, TestConnectionResponseDto{
 		Reached:   result.Reached,
 		LatencyMs: result.LatencyMs,
+		Code:      result.Code,
 		Error:     result.Error,
 	})
 }
@@ -425,6 +427,7 @@ func (router *Router) handleTestLLMConfig(writer stdhttp.ResponseWriter, request
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, TestConnectionResponseDto{
 		Reached:   result.Reached,
 		LatencyMs: result.LatencyMs,
+		Code:      result.Code,
 		Error:     result.Error,
 	})
 }

@@ -38,14 +38,9 @@ func NewWebhookSubscriptions(repository ports.WebhookRepository, deliveries port
 // generated when the caller did not provide one; secrets are returned to
 // the operator so they can configure verification on the receiver side.
 func (useCase *WebhookSubscriptions) Create(ctx context.Context, name string, target string, event string, secret string) (domain.Webhook, error) {
-	cleanedURL := strings.TrimSpace(target)
-	parsed, err := url.Parse(cleanedURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return domain.Webhook{}, fmt.Errorf("%w: url must be a valid http(s) endpoint", domain.ErrInvalidWebhook)
-	}
-	cleanedEvent := strings.TrimSpace(event)
-	if cleanedEvent == "" {
-		return domain.Webhook{}, fmt.Errorf("%w: event is required", domain.ErrInvalidWebhook)
+	cleanedURL, cleanedEvent, err := validateWebhookTarget(target, event)
+	if err != nil {
+		return domain.Webhook{}, err
 	}
 
 	id, err := useCase.ids.NextID(ctx)
@@ -73,6 +68,35 @@ func (useCase *WebhookSubscriptions) Create(ctx context.Context, name string, ta
 		return domain.Webhook{}, fmt.Errorf("persist webhook: %w", err)
 	}
 	return webhook, nil
+}
+
+// Update replaces mutable subscription fields while preserving the secret
+// when the caller omits a replacement.
+func (useCase *WebhookSubscriptions) Update(ctx context.Context, id string, name string, target string, event string, secret string) (domain.Webhook, error) {
+	cleanedID := strings.TrimSpace(id)
+	if cleanedID == "" {
+		return domain.Webhook{}, domain.ErrWebhookNotFound
+	}
+	cleanedURL, cleanedEvent, err := validateWebhookTarget(target, event)
+	if err != nil {
+		return domain.Webhook{}, err
+	}
+	current, err := useCase.repository.Find(ctx, cleanedID)
+	if err != nil {
+		return domain.Webhook{}, err
+	}
+	usedSecret := strings.TrimSpace(secret)
+	if usedSecret == "" {
+		usedSecret = current.Secret
+	}
+	current.Name = strings.TrimSpace(name)
+	current.URL = cleanedURL
+	current.Event = cleanedEvent
+	current.Secret = usedSecret
+	if err := useCase.repository.Update(ctx, current); err != nil {
+		return domain.Webhook{}, err
+	}
+	return useCase.repository.Find(ctx, cleanedID)
 }
 
 // Find returns the webhook subscription matching the supplied identifier.
@@ -264,4 +288,17 @@ func generateWebhookSecret() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buffer), nil
+}
+
+func validateWebhookTarget(target string, event string) (string, string, error) {
+	cleanedURL := strings.TrimSpace(target)
+	parsed, err := url.Parse(cleanedURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", "", fmt.Errorf("%w: url must be a valid http(s) endpoint", domain.ErrInvalidWebhook)
+	}
+	cleanedEvent := strings.TrimSpace(event)
+	if cleanedEvent == "" {
+		return "", "", fmt.Errorf("%w: event is required", domain.ErrInvalidWebhook)
+	}
+	return cleanedURL, cleanedEvent, nil
 }

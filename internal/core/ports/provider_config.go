@@ -42,6 +42,7 @@ type LLMConfigRepository interface {
 type ProviderTestResult struct {
 	Reached   bool
 	LatencyMs int64
+	Code      string
 	Error     string
 }
 

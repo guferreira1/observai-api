@@ -160,6 +160,7 @@ type AnalysisRequest struct {
 // supporting observations.
 type Evidence struct {
 	ID             string
+	Severity       Severity
 	Signal         SignalType
 	Service        string
 	Source         string
@@ -185,9 +186,10 @@ type RootCauseHypothesis struct {
 
 // Recommendation describes an actionable next step for the investigation.
 type Recommendation struct {
-	Action    string
-	Rationale string
-	Priority  int
+	Action      string
+	Rationale   string
+	Priority    int
+	EvidenceIDs []string
 }
 
 // AnalysisResult describes the normalized output of an observability analysis.

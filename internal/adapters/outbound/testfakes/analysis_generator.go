@@ -45,9 +45,10 @@ func (generator *AnalysisGenerator) Generate(_ context.Context, request domain.A
 		},
 		RecommendedActions: []domain.Recommendation{
 			{
-				Action:    "connect a read-only observability adapter and rerun the analysis",
-				Rationale: "deterministic test evidence proves the flow but does not represent production telemetry",
-				Priority:  1,
+				Action:      "connect a read-only observability adapter and rerun the analysis",
+				Rationale:   "deterministic test evidence proves the flow but does not represent production telemetry",
+				Priority:    1,
+				EvidenceIDs: evidenceIDs(evidence),
 			},
 		},
 		CodeLevelInsights: []string{
@@ -65,4 +66,15 @@ func evidenceNames(evidence []domain.Evidence) []string {
 		names = append(names, item.Name)
 	}
 	return names
+}
+
+func evidenceIDs(evidence []domain.Evidence) []string {
+	ids := make([]string, 0, len(evidence))
+	for _, item := range evidence {
+		if item.ID == "" {
+			continue
+		}
+		ids = append(ids, item.ID)
+	}
+	return ids
 }

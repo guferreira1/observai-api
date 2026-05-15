@@ -1,7 +1,6 @@
 package http
 
 import (
-	"errors"
 	"fmt"
 	stdhttp "net/http"
 	"strconv"
@@ -220,6 +219,39 @@ func (router *Router) handleListWebhooks(writer stdhttp.ResponseWriter, request 
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, items)
 }
 
+func (router *Router) handleUpdateWebhook(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	var dto CreateWebhookRequestDto
+	if err := decodeRequestBody(request, &dto); err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+
+	webhookID := chi.URLParam(request, "webhookID")
+	webhook, err := router.webhooks.Update(request.Context(), webhookID, dto.Name, dto.URL, dto.Event, dto.Secret)
+	if err != nil {
+		router.writeWebhookError(writer, requestID, startedAt, err)
+		return
+	}
+
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "webhook.updated",
+		ResourceType: "webhook",
+		ResourceID:   webhook.ID,
+		Metadata:     map[string]string{"event": webhook.Event, "url": webhook.URL},
+	})
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, WebhookResponseDto{
+		ID:         webhook.ID,
+		Name:       webhook.Name,
+		URL:        webhook.URL,
+		Event:      webhook.Event,
+		CreatedAt:  webhook.CreatedAt.Format(time.RFC3339),
+		DisabledAt: formatOptionalTime(webhook.DisabledAt),
+	})
+}
+
 func (router *Router) handleDeleteWebhook(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 	startedAt := time.Now()
 	requestID := router.requestID(request)
@@ -311,12 +343,12 @@ func (router *Router) handlePurgeAnalyses(writer stdhttp.ResponseWriter, request
 
 	raw := strings.TrimSpace(request.URL.Query().Get("olderThan"))
 	if raw == "" {
-		router.writeDomainError(writer, requestID, startedAt, errors.New("olderThan query parameter is required (e.g. 720h)"))
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_retention_purge", "olderThan query parameter is required (e.g. 720h)")
 		return
 	}
 	age, err := time.ParseDuration(raw)
 	if err != nil {
-		router.writeDomainError(writer, requestID, startedAt, err)
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_retention_purge", "olderThan must be a valid duration")
 		return
 	}
 
@@ -331,6 +363,65 @@ func (router *Router) handlePurgeAnalyses(writer stdhttp.ResponseWriter, request
 		Metadata:     map[string]string{"olderThan": age.String(), "deleted": strconv.Itoa(deleted)},
 	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, PurgeAnalysesResponseDto{Deleted: deleted})
+}
+
+func (router *Router) handleRetentionPolicy(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	policy := router.options.RetentionPolicy
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, RetentionPolicyResponseDto{
+		Days:       policy.Days,
+		Quantity:   policy.Quantity,
+		Cron:       policy.Cron,
+		HardDelete: true,
+	})
+}
+
+func (router *Router) handleRetentionPreview(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	query := request.URL.Query()
+	if raw := strings.TrimSpace(query.Get("olderThan")); raw != "" {
+		age, err := time.ParseDuration(raw)
+		if err != nil {
+			router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_retention_preview", "olderThan must be a valid duration")
+			return
+		}
+		preview, err := router.retention.PreviewPurge(request.Context(), age)
+		if err != nil {
+			router.writeDomainError(writer, requestID, startedAt, err)
+			return
+		}
+		cutoff := preview.Cutoff.Format(time.RFC3339)
+		router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, RetentionPreviewResponseDto{
+			WouldDelete: preview.WouldDelete,
+			OlderThan:   age.String(),
+			Cutoff:      &cutoff,
+		})
+		return
+	}
+
+	if raw := strings.TrimSpace(query.Get("keepNewest")); raw != "" {
+		keep, err := strconv.Atoi(raw)
+		if err != nil {
+			router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_retention_preview", "keepNewest must be a valid integer")
+			return
+		}
+		preview, err := router.retention.PreviewPurgeByQuantity(request.Context(), keep)
+		if err != nil {
+			router.writeDomainError(writer, requestID, startedAt, err)
+			return
+		}
+		router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, RetentionPreviewResponseDto{
+			WouldDelete: preview.WouldDelete,
+			KeepNewest:  preview.KeepNewest,
+		})
+		return
+	}
+
+	router.writeError(writer, requestID, startedAt, stdhttp.StatusBadRequest, "invalid_retention_preview", "olderThan or keepNewest query parameter is required")
 }
 
 func toIssueAPIKeyRequest(dto IssueAPIKeyRequestDto) (usecase.IssueAPIKeyRequest, error) {

@@ -153,6 +153,16 @@ func (useCase *Auth) UpdateProfile(ctx context.Context, userID string, email str
 	return useCase.users.FindByID(ctx, userID)
 }
 
+// UpdatePreferences stores user-owned UI preferences for the supplied user.
+func (useCase *Auth) UpdatePreferences(ctx context.Context, userID string, preferences domain.UserPreferences) (domain.User, error) {
+	normalized := domain.NormalizeUserPreferences(preferences)
+	now := useCase.now().UTC()
+	if err := useCase.users.UpdatePreferences(ctx, userID, normalized, now); err != nil {
+		return domain.User{}, err
+	}
+	return useCase.users.FindByID(ctx, userID)
+}
+
 // ChangePassword verifies the current password, stores a fresh bcrypt hash
 // and revokes every active refresh token belonging to the user so a stolen
 // session cannot survive the rotation.
@@ -175,6 +185,7 @@ func (useCase *Auth) ChangePassword(ctx context.Context, userID, current, replac
 	if err := useCase.users.UpdatePassword(ctx, userID, hash, now); err != nil {
 		return err
 	}
+	_ = useCase.users.SetMustChangePassword(ctx, userID, false, now)
 	_ = useCase.refresh.RevokeAllForUser(ctx, userID, now)
 	return nil
 }

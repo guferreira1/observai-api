@@ -54,7 +54,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/LivenessResponse"
+                $ref: "#/components/schemas/WrapperDtoResponde_HealthResponse"
   /readyz:
     get:
       tags: [operational]
@@ -70,13 +70,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ReadinessResponse"
+                $ref: "#/components/schemas/WrapperDtoResponde_ReadinessResponseDto"
         "503":
           description: One or more dependencies are not ready.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ReadinessResponse"
+                $ref: "#/components/schemas/WrapperDtoResponde_ReadinessResponseDto"
   /metrics:
     get:
       tags: [operational]
@@ -115,6 +115,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WrapperDtoResponde_CapabilitiesResponse"
+  /v1/telemetry:
+    post:
+      tags: [operational]
+      summary: Accept frontend telemetry events.
+      description: |
+        Accepts provider-agnostic client telemetry used for product diagnostics.
+        The API stores no provider-specific response fields in the public
+        contract and acknowledges the number of accepted events.
+      operationId: acceptTelemetry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "202":
+          description: Telemetry accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_TelemetryAcceptedResponseDto"
   /v1/analyses:
     post:
       tags: [analysis]
@@ -611,6 +634,62 @@ paths:
         "204": { description: Password updated; client must log in again. }
         "401": { description: Current password is incorrect. }
 
+  /v1/me/preferences:
+    get:
+      tags: [profile]
+      summary: Return the authenticated user's UI preferences.
+      operationId: getMyPreferences
+      responses:
+        "200":
+          description: Current preferences.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_PreferencesDto"
+    patch:
+      tags: [profile]
+      summary: Partially update the authenticated user's UI preferences.
+      operationId: updateMyPreferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePreferencesRequestDto"
+      responses:
+        "200":
+          description: Updated preferences.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_PreferencesDto"
+
+  /v1/me/sessions:
+    get:
+      tags: [profile]
+      summary: List browser sessions visible to the current user.
+      operationId: listMySessions
+      responses:
+        "200":
+          description: Current sessions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_MySessionsResponseDto"
+
+  /v1/me/keys:
+    get:
+      tags: [profile]
+      summary: List API keys visible from the current credential.
+      operationId: listMyKeys
+      responses:
+        "200":
+          description: Current API-key credential projection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_MyKeysResponseDto"
+
   /v1/admin/users:
     get:
       tags: [admin]
@@ -783,6 +862,23 @@ paths:
       operationId: createWebhook
       responses: { "201": { description: Webhook created. } }
   /v1/admin/webhooks/{webhookID}:
+    patch:
+      tags: [admin]
+      operationId: updateWebhook
+      parameters: [{ in: path, name: webhookID, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWebhookRequestDto"
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_WebhookResponseDto"
     delete:
       tags: [admin]
       operationId: deleteWebhook
@@ -809,6 +905,19 @@ paths:
       operationId: retryWebhookDelivery
       parameters: [{ in: path, name: deliveryID, required: true, schema: { type: string } }]
       responses: { "202": { description: Retry queued. } }
+  /v1/admin/webhook-deliveries/{deliveryID}/replay:
+    post:
+      tags: [admin]
+      summary: Replay a persisted webhook delivery using the original payload.
+      operationId: replayWebhookDelivery
+      parameters: [{ in: path, name: deliveryID, required: true, schema: { type: string } }]
+      responses:
+        "202":
+          description: Replay queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_WebhookDeliveryDto"
 
   /v1/admin/audit:
     get:
@@ -833,6 +942,33 @@ paths:
       parameters:
         - { in: query, name: olderThan, required: true, schema: { type: string } }
       responses: { "200": { description: Purge outcome. } }
+  /v1/admin/retention/policy:
+    get:
+      tags: [admin]
+      summary: Return the active retention policy.
+      operationId: getRetentionPolicy
+      responses:
+        "200":
+          description: Retention policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_RetentionPolicyResponseDto"
+  /v1/admin/retention/preview:
+    get:
+      tags: [admin]
+      summary: Preview a retention purge without deleting analyses.
+      operationId: previewRetention
+      parameters:
+        - { in: query, name: olderThan, schema: { type: string } }
+        - { in: query, name: keepNewest, schema: { type: integer } }
+      responses:
+        "200":
+          description: Retention preview.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_RetentionPreviewResponseDto"
 components:
   parameters:
     AnalysisID:
@@ -957,14 +1093,7 @@ components:
         status:
           type: string
           example: ok
-    LivenessResponse:
-      type: object
-      required: [status]
-      properties:
-        status:
-          type: string
-          example: ok
-    ReadinessResponse:
+    ReadinessResponseDto:
       type: object
       required: [status, checks]
       properties:
@@ -981,7 +1110,7 @@ components:
       properties:
         name:
           type: string
-          description: Dependency identifier (e.g., `postgres`, `redis`, `prometheus`).
+          description: Dependency identifier (e.g., `database`, `redis`, `prometheus`).
         status:
           type: string
           enum: [ok, failed]
@@ -1045,7 +1174,8 @@ components:
             `invalid_chat_question`, `question_out_of_scope`, `invalid_json`,
             `invalid_request`, `analysis_not_found`,
             `analysis_context_not_found`, `request_body_too_large`,
-            `request_canceled`, `request_timeout`, `internal_error`.
+            `request_canceled`, `request_timeout`, `provider_auth_failed`,
+            `internal_error`.
           enum:
             - invalid_analysis_request
             - invalid_analysis_filter
@@ -1058,9 +1188,14 @@ components:
             - analysis_job_not_found
             - chat_message_not_found
             - invalid_export_format
+            - invalid_retention_preview
+            - invalid_retention_purge
             - request_body_too_large
             - request_canceled
             - request_timeout
+            - provider_auth_failed
+            - webhook_not_found
+            - webhook_delivery_not_found
             - not_found
             - internal_error
         message:
@@ -1108,6 +1243,7 @@ components:
       type: object
       required:
         - id
+        - jobId
         - summary
         - severity
         - confidence
@@ -1121,6 +1257,9 @@ components:
         - createdAt
       properties:
         id: { type: string }
+        jobId:
+          type: string
+          description: Analysis job identifier. Equal to `id` for completed asynchronous analyses.
         summary: { type: string }
         severity:
           type: string
@@ -1165,11 +1304,14 @@ components:
             $ref: "#/components/schemas/AnalysisResponseDto"
     EvidenceDto:
       type: object
-      required: [id, signal, service, source, name, summary, observed, score]
+      required: [id, severity, signal, service, source, name, summary, observed, score]
       properties:
         id:
           type: string
           description: Stable identifier of this evidence within the parent analysis. Used to cite evidence in chat answers and to link root-cause hypotheses to supporting observations.
+        severity:
+          type: string
+          enum: [info, low, medium, high, critical]
         signal:
           type: string
           enum: [logs, metrics, traces, apm]
@@ -1187,6 +1329,21 @@ components:
         reference: { type: string }
         provider: { type: string }
         query: { type: string }
+        traceId:
+          type: string
+          description: Correlatable trace identifier when the evidence came from traces or carries trace context.
+        spanId:
+          type: string
+          description: Correlatable span identifier when available.
+        logId:
+          type: string
+          description: Correlatable log event identifier when available.
+        metricId:
+          type: string
+          description: Correlatable metric series identifier when available.
+        correlationId:
+          type: string
+          description: Cross-signal correlation identifier derived from normalized attributes when available.
         attributes:
           type: object
           additionalProperties: { type: string }
@@ -1204,13 +1361,17 @@ components:
           enum: [low, medium, high]
     RecommendationDto:
       type: object
-      required: [action, rationale, priority]
+      required: [action, rationale, priority, evidenceIds]
       properties:
         action: { type: string }
         rationale: { type: string }
         priority:
           type: integer
           description: Lower numbers indicate higher priority (1 is most important).
+        evidenceIds:
+          type: array
+          description: Evidence identifiers (`EvidenceDto.id`) that support this recommendation.
+          items: { type: string }
     ChatRequestDto:
       type: object
       required: [question]
@@ -1302,6 +1463,30 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/HealthResponse"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_ReadinessResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/ReadinessResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    TelemetryAcceptedResponseDto:
+      type: object
+      required: [accepted, eventCount]
+      properties:
+        accepted: { type: boolean }
+        eventCount:
+          type: integer
+          minimum: 1
+    WrapperDtoResponde_TelemetryAcceptedResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/TelemetryAcceptedResponseDto"
         metadata:
           $ref: "#/components/schemas/ResponseMetadata"
     CapabilitiesResponse:
@@ -1605,15 +1790,59 @@ components:
 
     UserResponseDto:
       type: object
-      required: [id, email, role, isActive, createdAt, updatedAt]
+      required: [id, email, role, isActive, mustChangePassword, preferences, createdAt, updatedAt]
       properties:
         id: { type: string }
         email: { type: string, format: email }
         role: { type: string, enum: [admin, operator, viewer] }
         isActive: { type: boolean }
+        mustChangePassword:
+          type: boolean
+          description: Frontend must force a password-change flow before normal use when true.
+        preferences:
+          $ref: "#/components/schemas/PreferencesDto"
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         lastLoginAt: { type: string, format: date-time, nullable: true }
+    UpdatePreferencesRequestDto:
+      type: object
+      properties:
+        locale: { type: string }
+        timezone: { type: string }
+        theme: { type: string, enum: [light, dark, system] }
+        denseMode: { type: boolean }
+    PreferencesDto:
+      type: object
+      required: [locale, timezone, theme, denseMode]
+      properties:
+        locale: { type: string }
+        timezone: { type: string }
+        theme: { type: string, enum: [light, dark, system] }
+        denseMode: { type: boolean }
+    MySessionsResponseDto:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MySessionDto"
+    MySessionDto:
+      type: object
+      required: [id, current]
+      properties:
+        id: { type: string }
+        current: { type: boolean }
+        issuedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+    MyKeysResponseDto:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/APIKeyDto"
     SessionResponseDto:
       type: object
       required: [user, csrfToken, expiresAt]
@@ -1628,6 +1857,30 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/UserResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_PreferencesDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/PreferencesDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_MySessionsResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/MySessionsResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_MyKeysResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/MyKeysResponseDto"
         metadata:
           $ref: "#/components/schemas/ResponseMetadata"
     WrapperDtoResponde_SessionResponseDto:
@@ -1744,10 +1997,44 @@ components:
       properties:
         reached: { type: boolean }
         latencyMs: { type: integer, minimum: 0 }
+        code:
+          type: string
+          description: Stable machine-readable probe result code, e.g. `provider_auth_failed`.
         error: { type: string }
 
     # ---- Webhooks ------------------------------------------------------------
 
+    CreateWebhookRequestDto:
+      type: object
+      required: [name, url, event]
+      properties:
+        name: { type: string }
+        url: { type: string, format: uri }
+        event: { type: string }
+        secret:
+          type: string
+          description: Shared secret. Omit on update to preserve the existing value.
+    WebhookResponseDto:
+      type: object
+      required: [id, name, url, event, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        url: { type: string, format: uri }
+        event: { type: string }
+        secret:
+          type: string
+          description: Returned only at creation time.
+        createdAt: { type: string, format: date-time }
+        disabledAt: { type: string, format: date-time, nullable: true }
+    WrapperDtoResponde_WebhookResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/WebhookResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
     WebhookDeliveryDto:
       type: object
       required: [id, subscriptionId, event, status, attempt, createdAt, updatedAt]
@@ -1769,3 +2056,46 @@ components:
             - type: object
             - type: array
             - type: string
+    WrapperDtoResponde_WebhookDeliveryDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/WebhookDeliveryDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+
+    # ---- Retention -----------------------------------------------------------
+
+    RetentionPolicyResponseDto:
+      type: object
+      required: [days, quantity, hardDelete]
+      properties:
+        days: { type: integer, minimum: 0 }
+        quantity: { type: integer, minimum: 0 }
+        cron: { type: string }
+        hardDelete: { type: boolean }
+    RetentionPreviewResponseDto:
+      type: object
+      required: [wouldDelete]
+      properties:
+        wouldDelete: { type: integer, minimum: 0 }
+        olderThan: { type: string }
+        cutoff: { type: string, format: date-time, nullable: true }
+        keepNewest: { type: integer, minimum: 0 }
+    WrapperDtoResponde_RetentionPolicyResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/RetentionPolicyResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_RetentionPreviewResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/RetentionPreviewResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"

@@ -18,6 +18,12 @@ SELECT id, name, url, secret, event, created_at, disabled_at
 FROM webhook_subscriptions
 WHERE event = sqlc.arg(event) AND disabled_at IS NULL;
 
+-- name: UpdateWebhookSubscription :one
+UPDATE webhook_subscriptions
+SET name = sqlc.arg(name), url = sqlc.arg(url), secret = sqlc.arg(secret), event = sqlc.arg(event)
+WHERE id = sqlc.arg(id)
+RETURNING id, name, url, secret, event, created_at, disabled_at;
+
 -- name: DisableWebhookSubscription :exec
 UPDATE webhook_subscriptions
 SET disabled_at = sqlc.arg(disabled_at)

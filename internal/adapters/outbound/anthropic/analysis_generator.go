@@ -42,9 +42,10 @@ type rootCausePayload struct {
 }
 
 type recommendationPayload struct {
-	Action    string `json:"action"`
-	Rationale string `json:"rationale"`
-	Priority  int    `json:"priority"`
+	Action      string   `json:"action"`
+	Rationale   string   `json:"rationale"`
+	Priority    int      `json:"priority"`
+	EvidenceIDs []string `json:"evidenceIds"`
 }
 
 // Generate renders the analysis prompt, sends the request and decodes the
@@ -117,9 +118,10 @@ func decodeAnalysisPayload(content string, evidence []domain.Evidence) (domain.A
 	recommendations := make([]domain.Recommendation, 0, len(payload.RecommendedActions))
 	for _, item := range payload.RecommendedActions {
 		recommendations = append(recommendations, domain.Recommendation{
-			Action:    item.Action,
-			Rationale: item.Rationale,
-			Priority:  item.Priority,
+			Action:      item.Action,
+			Rationale:   item.Rationale,
+			Priority:    item.Priority,
+			EvidenceIDs: item.EvidenceIDs,
 		})
 	}
 

@@ -128,14 +128,16 @@ type RefreshToken struct {
 }
 
 type User struct {
-	ID           string             `json:"id"`
-	Email        string             `json:"email"`
-	PasswordHash string             `json:"password_hash"`
-	Role         string             `json:"role"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+	ID                 string             `json:"id"`
+	Email              string             `json:"email"`
+	PasswordHash       string             `json:"password_hash"`
+	Role               string             `json:"role"`
+	IsActive           bool               `json:"is_active"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	LastLoginAt        pgtype.Timestamptz `json:"last_login_at"`
+	MustChangePassword bool               `json:"must_change_password"`
+	Preferences        []byte             `json:"preferences"`
 }
 
 type WebhookDelivery struct {

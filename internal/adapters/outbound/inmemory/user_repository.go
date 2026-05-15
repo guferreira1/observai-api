@@ -33,6 +33,7 @@ func (repository *UserRepository) Create(_ context.Context, user domain.User) er
 		}
 	}
 	user.Email = normalized
+	user.Preferences = domain.NormalizeUserPreferences(user.Preferences)
 	repository.users[user.ID] = user
 	return nil
 }
@@ -110,6 +111,20 @@ func (repository *UserRepository) UpdateProfile(_ context.Context, id string, em
 	return nil
 }
 
+// UpdatePreferences stores the user's UI preference projection.
+func (repository *UserRepository) UpdatePreferences(_ context.Context, id string, preferences domain.UserPreferences, updatedAt time.Time) error {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	user, ok := repository.users[id]
+	if !ok {
+		return domain.ErrUserNotFound
+	}
+	user.Preferences = domain.NormalizeUserPreferences(preferences)
+	user.UpdatedAt = updatedAt
+	repository.users[id] = user
+	return nil
+}
+
 // UpdatePassword replaces the user's password hash.
 func (repository *UserRepository) UpdatePassword(_ context.Context, id string, passwordHash string, updatedAt time.Time) error {
 	repository.mu.Lock()
@@ -119,6 +134,7 @@ func (repository *UserRepository) UpdatePassword(_ context.Context, id string, p
 		return domain.ErrUserNotFound
 	}
 	user.PasswordHash = passwordHash
+	user.MustChangePassword = false
 	user.UpdatedAt = updatedAt
 	repository.users[id] = user
 	return nil
@@ -147,6 +163,20 @@ func (repository *UserRepository) SetActive(_ context.Context, id string, active
 		return domain.ErrUserNotFound
 	}
 	user.IsActive = active
+	user.UpdatedAt = updatedAt
+	repository.users[id] = user
+	return nil
+}
+
+// SetMustChangePassword toggles the forced password-change flag.
+func (repository *UserRepository) SetMustChangePassword(_ context.Context, id string, mustChangePassword bool, updatedAt time.Time) error {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	user, ok := repository.users[id]
+	if !ok {
+		return domain.ErrUserNotFound
+	}
+	user.MustChangePassword = mustChangePassword
 	user.UpdatedAt = updatedAt
 	repository.users[id] = user
 	return nil

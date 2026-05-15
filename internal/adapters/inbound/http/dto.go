@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/guferreira1/observai-api/internal/core/domain"
+	"github.com/guferreira1/observai-api/internal/platform/health"
 )
 
 // WrapperDtoResponde wraps successful API responses in a stable frontend contract.
@@ -55,6 +56,20 @@ type HealthResponse struct {
 	Status string `json:"status"`
 }
 
+// ReadinessResponseDto describes dependency readiness for /readyz.
+type ReadinessResponseDto struct {
+	Status string              `json:"status"`
+	Checks []ReadinessCheckDto `json:"checks"`
+}
+
+// ReadinessCheckDto describes a single named readiness check.
+type ReadinessCheckDto struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Error      string `json:"error,omitempty"`
+	DurationMs int64  `json:"durationMs"`
+}
+
 // CapabilitiesResponse describes non-sensitive runtime capabilities exposed to clients.
 //
 // Clients use this payload to render the runtime panel, gate features that depend on
@@ -87,6 +102,29 @@ type CapabilityLimits struct {
 	RateLimitBurst       int     `json:"rateLimitBurst,omitempty"`
 }
 
+// RetentionPolicyOptions describes configured retention scheduling defaults.
+type RetentionPolicyOptions struct {
+	Days     int
+	Quantity int
+	Cron     string
+}
+
+// RetentionPolicyResponseDto describes the active retention policy.
+type RetentionPolicyResponseDto struct {
+	Days       int    `json:"days"`
+	Quantity   int    `json:"quantity"`
+	Cron       string `json:"cron,omitempty"`
+	HardDelete bool   `json:"hardDelete"`
+}
+
+// RetentionPreviewResponseDto describes a non-destructive purge preview.
+type RetentionPreviewResponseDto struct {
+	WouldDelete int     `json:"wouldDelete"`
+	OlderThan   string  `json:"olderThan,omitempty"`
+	Cutoff      *string `json:"cutoff,omitempty"`
+	KeepNewest  int     `json:"keepNewest,omitempty"`
+}
+
 // AnalysisRequestDto describes a provider-agnostic analysis request.
 type AnalysisRequestDto struct {
 	Goal             string   `json:"goal" validate:"required"`
@@ -105,6 +143,7 @@ type TimeDto struct {
 // AnalysisResponseDto describes an analysis response.
 type AnalysisResponseDto struct {
 	ID                 string                   `json:"id"`
+	JobID              string                   `json:"jobId"`
 	Summary            string                   `json:"summary"`
 	Severity           string                   `json:"severity"`
 	Confidence         string                   `json:"confidence"`
@@ -154,6 +193,7 @@ type AnalysisStatsTrendDto struct {
 // EvidenceDto describes normalized evidence returned to API clients.
 type EvidenceDto struct {
 	ID             string            `json:"id"`
+	Severity       string            `json:"severity"`
 	Signal         string            `json:"signal"`
 	Service        string            `json:"service"`
 	Source         string            `json:"source"`
@@ -166,6 +206,11 @@ type EvidenceDto struct {
 	Reference      string            `json:"reference,omitempty"`
 	Provider       string            `json:"provider,omitempty"`
 	Query          string            `json:"query,omitempty"`
+	TraceID        string            `json:"traceId,omitempty"`
+	SpanID         string            `json:"spanId,omitempty"`
+	LogID          string            `json:"logId,omitempty"`
+	MetricID       string            `json:"metricId,omitempty"`
+	CorrelationID  string            `json:"correlationId,omitempty"`
 	Attributes     map[string]string `json:"attributes,omitempty"`
 	RedactedFields []string          `json:"redactedFields,omitempty"`
 }
@@ -179,9 +224,10 @@ type RootCauseHypothesisDto struct {
 
 // RecommendationDto describes a recommended action returned to API clients.
 type RecommendationDto struct {
-	Action    string `json:"action"`
-	Rationale string `json:"rationale"`
-	Priority  int    `json:"priority"`
+	Action      string   `json:"action"`
+	Rationale   string   `json:"rationale"`
+	Priority    int      `json:"priority"`
+	EvidenceIDs []string `json:"evidenceIds"`
 }
 
 // AnalysisJobAcceptedDto describes a job acceptance response (HTTP 202).
@@ -287,6 +333,22 @@ type ChatMessageDto struct {
 	CreatedAt  time.Time         `json:"createdAt"`
 }
 
+func toReadinessResponseDto(result health.Result) ReadinessResponseDto {
+	checks := make([]ReadinessCheckDto, 0, len(result.Checks))
+	for _, check := range result.Checks {
+		checks = append(checks, ReadinessCheckDto{
+			Name:       check.Name,
+			Status:     string(check.Status),
+			Error:      check.Error,
+			DurationMs: check.DurationMs,
+		})
+	}
+	return ReadinessResponseDto{
+		Status: string(result.Status),
+		Checks: checks,
+	}
+}
+
 func toDomainAnalysisRequest(dto AnalysisRequestDto) domain.AnalysisRequest {
 	signals := make([]domain.SignalType, 0, len(dto.Signals))
 	for _, signal := range dto.Signals {
@@ -310,6 +372,7 @@ func toAnalysisResponseDto(result domain.AnalysisResult) AnalysisResponseDto {
 	for _, item := range result.Evidence {
 		evidence = append(evidence, EvidenceDto{
 			ID:             item.ID,
+			Severity:       evidenceSeverityLabel(item.Severity),
 			Signal:         string(item.Signal),
 			Service:        item.Service,
 			Source:         item.Source,
@@ -322,6 +385,11 @@ func toAnalysisResponseDto(result domain.AnalysisResult) AnalysisResponseDto {
 			Reference:      item.Reference,
 			Provider:       item.Provider,
 			Query:          item.Query,
+			TraceID:        normalizedSignalID(item, "traceId", domain.SignalTraces),
+			SpanID:         normalizedEvidenceAttribute(item, "spanId"),
+			LogID:          normalizedSignalID(item, "logId", domain.SignalLogs),
+			MetricID:       normalizedSignalID(item, "metricId", domain.SignalMetrics),
+			CorrelationID:  normalizedCorrelationID(item),
 			Attributes:     item.Attributes,
 			RedactedFields: item.RedactedFields,
 		})
@@ -339,14 +407,16 @@ func toAnalysisResponseDto(result domain.AnalysisResult) AnalysisResponseDto {
 	recommendations := make([]RecommendationDto, 0, len(result.RecommendedActions))
 	for _, item := range result.RecommendedActions {
 		recommendations = append(recommendations, RecommendationDto{
-			Action:    item.Action,
-			Rationale: item.Rationale,
-			Priority:  item.Priority,
+			Action:      item.Action,
+			Rationale:   item.Rationale,
+			Priority:    item.Priority,
+			EvidenceIDs: nonNilStringSlice(item.EvidenceIDs),
 		})
 	}
 
 	return AnalysisResponseDto{
 		ID:                 result.ID,
+		JobID:              result.ID,
 		Summary:            result.Summary,
 		Severity:           string(result.Severity),
 		Confidence:         string(result.Confidence),
@@ -359,6 +429,47 @@ func toAnalysisResponseDto(result domain.AnalysisResult) AnalysisResponseDto {
 		MissingEvidence:    result.MissingEvidence,
 		CreatedAt:          result.CreatedAt,
 	}
+}
+
+func evidenceSeverityLabel(severity domain.Severity) string {
+	if severity == "" {
+		return string(domain.SeverityLow)
+	}
+	return string(domain.NormalizeSeverity(severity))
+}
+
+func nonNilStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	return values
+}
+
+func normalizedEvidenceAttribute(evidence domain.Evidence, key string) string {
+	if len(evidence.Attributes) == 0 {
+		return ""
+	}
+	return evidence.Attributes[key]
+}
+
+func normalizedSignalID(evidence domain.Evidence, key string, signal domain.SignalType) string {
+	if value := normalizedEvidenceAttribute(evidence, key); value != "" {
+		return value
+	}
+	if evidence.Signal == signal {
+		return evidence.ID
+	}
+	return ""
+}
+
+func normalizedCorrelationID(evidence domain.Evidence) string {
+	if value := normalizedEvidenceAttribute(evidence, "correlationId"); value != "" {
+		return value
+	}
+	if key := evidence.CorrelationKey(); key != "" {
+		return key
+	}
+	return evidence.ID
 }
 
 func toAnalysisStatsResponseDto(stats domain.AnalysisStats) AnalysisStatsResponseDto {

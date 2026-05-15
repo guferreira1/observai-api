@@ -58,6 +58,16 @@ func (stub *stubWebhookRepo) ListActive(_ context.Context, event string) ([]doma
 	return out, nil
 }
 
+func (stub *stubWebhookRepo) Update(_ context.Context, webhook domain.Webhook) error {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if _, ok := stub.webhooks[webhook.ID]; !ok {
+		return domain.ErrWebhookNotFound
+	}
+	stub.webhooks[webhook.ID] = webhook
+	return nil
+}
+
 func (stub *stubWebhookRepo) Disable(_ context.Context, id string) error {
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
@@ -244,6 +254,24 @@ func TestWebhookRetryReschedulesAndDispatches(t *testing.T) {
 	}
 	if len(dispatcher.requests) != 2 || dispatcher.requests[1].webhook.ID != webhook.ID {
 		t.Fatalf("dispatcher should have been called again, got %+v", dispatcher.requests)
+	}
+}
+
+func TestWebhookUpdatePreservesSecretWhenOmitted(t *testing.T) {
+	useCase, _, _, _ := newWebhookFixture()
+	webhook, err := useCase.Create(context.Background(), "alerts", "https://hook.example.com", domain.WebhookEventAnalysisCompleted, "secret")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	updated, err := useCase.Update(context.Background(), webhook.ID, "ops", "https://ops.example.com", domain.WebhookEventAnalysisFailed, "")
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if updated.Name != "ops" || updated.URL != "https://ops.example.com" || updated.Event != domain.WebhookEventAnalysisFailed {
+		t.Fatalf("unexpected update: %+v", updated)
+	}
+	if updated.Secret != "secret" {
+		t.Fatalf("expected secret to be preserved")
 	}
 }
 

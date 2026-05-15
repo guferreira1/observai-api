@@ -147,3 +147,39 @@ func (q *Queries) ListWebhookSubscriptions(ctx context.Context, arg ListWebhookS
 	}
 	return items, nil
 }
+
+const updateWebhookSubscription = `-- name: UpdateWebhookSubscription :one
+UPDATE webhook_subscriptions
+SET name = $1, url = $2, secret = $3, event = $4
+WHERE id = $5
+RETURNING id, name, url, secret, event, created_at, disabled_at
+`
+
+type UpdateWebhookSubscriptionParams struct {
+	Name   string `json:"name"`
+	Url    string `json:"url"`
+	Secret string `json:"secret"`
+	Event  string `json:"event"`
+	ID     string `json:"id"`
+}
+
+func (q *Queries) UpdateWebhookSubscription(ctx context.Context, arg UpdateWebhookSubscriptionParams) (WebhookSubscription, error) {
+	row := q.db.QueryRow(ctx, updateWebhookSubscription,
+		arg.Name,
+		arg.Url,
+		arg.Secret,
+		arg.Event,
+		arg.ID,
+	)
+	var i WebhookSubscription
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Url,
+		&i.Secret,
+		&i.Event,
+		&i.CreatedAt,
+		&i.DisabledAt,
+	)
+	return i, err
+}

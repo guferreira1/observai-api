@@ -20,7 +20,7 @@ func buildHealthProbes(store analysisStore, cache analysisContextCache, deps pro
 	if store.postgres != nil {
 		postgres := store.postgres
 		probes = append(probes, health.ProbeFunc{
-			ProbeName: "postgres",
+			ProbeName: "database",
 			Fn: func(ctx context.Context) error {
 				return postgres.Ping(ctx)
 			},

@@ -42,6 +42,18 @@ func (stub *stubRetentionRepo) DeleteOlderThan(_ context.Context, cutoff time.Ti
 	return deleted, nil
 }
 
+func (stub *stubRetentionRepo) CountOlderThan(_ context.Context, cutoff time.Time) (int, error) {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	count := 0
+	for _, created := range stub.records {
+		if created.Before(cutoff) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (stub *stubRetentionRepo) DeleteKeepingNewest(_ context.Context, keep int) (int, error) {
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
@@ -69,6 +81,15 @@ func (stub *stubRetentionRepo) DeleteKeepingNewest(_ context.Context, keep int) 
 		deleted++
 	}
 	return deleted, nil
+}
+
+func (stub *stubRetentionRepo) CountExceedingNewest(_ context.Context, keep int) (int, error) {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if keep <= 0 || len(stub.records) <= keep {
+		return 0, nil
+	}
+	return len(stub.records) - keep, nil
 }
 
 func TestRetentionDeleteReturnsNotFoundForUnknownID(t *testing.T) {
@@ -111,6 +132,27 @@ func TestRetentionPurgeRejectsNonPositiveAge(t *testing.T) {
 	}
 }
 
+func TestRetentionPreviewPurgeCountsWithoutDeleting(t *testing.T) {
+	repo := newStubRetentionRepo()
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	repo.records["recent"] = now.Add(-30 * time.Minute)
+	repo.records["old"] = now.Add(-48 * time.Hour)
+
+	useCase := NewAnalysisRetention(repo)
+	useCase.now = func() time.Time { return now }
+
+	preview, err := useCase.PreviewPurge(context.Background(), 24*time.Hour)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if preview.WouldDelete != 1 {
+		t.Fatalf("expected 1 preview deletion, got %d", preview.WouldDelete)
+	}
+	if len(repo.records) != 2 {
+		t.Fatalf("preview must not delete records")
+	}
+}
+
 func TestRetentionPurgeByQuantityKeepsNewestN(t *testing.T) {
 	repo := newStubRetentionRepo()
 	base := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
@@ -134,6 +176,22 @@ func TestRetentionPurgeByQuantityRejectsNonPositive(t *testing.T) {
 	useCase := NewAnalysisRetention(newStubRetentionRepo())
 	if _, err := useCase.PurgeByQuantity(context.Background(), 0); err == nil {
 		t.Fatalf("expected error for zero keep")
+	}
+}
+
+func TestRetentionPreviewPurgeByQuantityCountsOverflow(t *testing.T) {
+	repo := newStubRetentionRepo()
+	base := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		repo.records[strconvI(i)] = base.Add(time.Duration(i) * time.Hour)
+	}
+	useCase := NewAnalysisRetention(repo)
+	preview, err := useCase.PreviewPurgeByQuantity(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if preview.WouldDelete != 3 {
+		t.Fatalf("expected 3 preview deletions, got %d", preview.WouldDelete)
 	}
 }
 

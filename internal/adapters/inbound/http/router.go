@@ -15,6 +15,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
+	"github.com/guferreira1/observai-api/internal/platform/health"
 	"github.com/guferreira1/observai-api/internal/platform/logger"
 )
 
@@ -29,8 +30,10 @@ type RouterOptions struct {
 	Metrics            stdhttp.Handler
 	Liveness           stdhttp.Handler
 	Readiness          stdhttp.Handler
+	ReadinessChecker   *health.Checker
 	Capabilities       CapabilitiesResponse
 	Provider           ProviderSummary
+	RetentionPolicy    RetentionPolicyOptions
 	Trace              *usecase.Trace
 	APIKeys            *usecase.APIKey
 	Webhooks           *usecase.WebhookSubscriptions
@@ -108,20 +111,28 @@ func (router *Router) routes() {
 	router.mux.Use(loggerMiddleware(router.logger))
 	router.mux.Use(recoverMiddleware(router.logger, router.providerSummary))
 	router.mux.Use(rateLimitMiddleware(newRateLimiter(router.options.RateLimit), router.providerSummary))
-	router.mux.Use(authMiddleware(router.options.Auth))
-	router.mux.Use(csrfMiddleware())
+	router.mux.Use(authMiddleware(router.options.Auth, router.providerSummary))
+	router.mux.Use(csrfMiddleware(router.providerSummary))
 	router.mux.Use(auditMiddleware(router.auditLog, router.logger))
 	router.mux.Use(bodyLimitMiddleware(router.options.MaxRequestBodyByte))
 	router.mux.Use(timeoutMiddleware(router.options.RequestTimeout))
 
+	router.mux.NotFound(router.handleNotFound)
+	router.mux.MethodNotAllowed(router.handleMethodNotAllowed)
+
 	router.mux.Get("/health", router.handleHealth)
-	if router.options.Liveness != nil {
-		router.mux.Method(stdhttp.MethodGet, "/healthz", router.options.Liveness)
-	}
-	if router.options.Readiness != nil {
+	router.mux.Get("/healthz", router.handleLiveness)
+	if router.options.ReadinessChecker != nil {
+		router.mux.Get("/readyz", router.handleReadiness)
+	} else if router.options.Readiness != nil {
 		router.mux.Method(stdhttp.MethodGet, "/readyz", router.options.Readiness)
 	}
-	router.mux.Get("/v1/openapi.yaml", router.handleOpenAPI)
+	swaggerUI := newSwaggerUIHandler()
+	router.mux.Method(stdhttp.MethodGet, swaggerUIRoutePath, swaggerUI)
+	router.mux.Method(stdhttp.MethodGet, swaggerUIBasePath+"*", swaggerUI)
+	router.mux.Get(swaggerUIAliasPath, redirectSwaggerUIAlias)
+	router.mux.Get(swaggerUIAliasBasePath+"*", redirectSwaggerUIAlias)
+	router.mux.Get(openAPIYAMLRoutePath, router.handleOpenAPI)
 	router.mux.Get("/v1/capabilities", router.handleCapabilities)
 
 	reader := RequireRole(domain.RoleViewer, domain.RoleOperator, domain.RoleAdmin)
@@ -141,6 +152,7 @@ func (router *Router) routes() {
 	router.mux.Method(stdhttp.MethodGet, "/v1/analyses/{analysisID}/chat", reader(router.handleChatHistory))
 	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat/{messageID}/feedback", writer(router.handleChatFeedback))
 	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat/{messageID}/regenerate", writer(router.handleChatRegenerate))
+	router.mux.Method(stdhttp.MethodPost, "/v1/telemetry", reader(router.handleTelemetry))
 
 	if router.setup != nil {
 		router.mux.Method(stdhttp.MethodGet, "/v1/setup/status", stdhttp.HandlerFunc(router.handleSetupStatus))
@@ -154,6 +166,10 @@ func (router *Router) routes() {
 		router.mux.Method(stdhttp.MethodGet, "/v1/me", reader(router.handleMe))
 		router.mux.Method(stdhttp.MethodPatch, "/v1/me", reader(router.handleUpdateMe))
 		router.mux.Method(stdhttp.MethodPost, "/v1/me/password", reader(router.handleChangePassword))
+		router.mux.Method(stdhttp.MethodGet, "/v1/me/preferences", reader(router.handleGetPreferences))
+		router.mux.Method(stdhttp.MethodPatch, "/v1/me/preferences", reader(router.handleUpdatePreferences))
+		router.mux.Method(stdhttp.MethodGet, "/v1/me/sessions", reader(router.handleListSessions))
+		router.mux.Method(stdhttp.MethodGet, "/v1/me/keys", reader(router.handleListMyKeys))
 	}
 
 	if router.apiKeys != nil {
@@ -164,10 +180,12 @@ func (router *Router) routes() {
 	if router.webhooks != nil {
 		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks", admin(router.handleCreateWebhook))
 		router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhooks", admin(router.handleListWebhooks))
+		router.mux.Method(stdhttp.MethodPatch, "/v1/admin/webhooks/{webhookID}", admin(router.handleUpdateWebhook))
 		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/webhooks/{webhookID}", admin(router.handleDeleteWebhook))
 		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks/{webhookID}/test", admin(router.handleTestWebhook))
 		router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhook-deliveries", admin(router.handleListWebhookDeliveries))
 		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhook-deliveries/{deliveryID}/retry", admin(router.handleRetryWebhookDelivery))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhook-deliveries/{deliveryID}/replay", admin(router.handleReplayWebhookDelivery))
 	}
 	if router.auditLog != nil {
 		router.mux.Method(stdhttp.MethodGet, "/v1/admin/audit", admin(router.handleListAudit))
@@ -175,6 +193,8 @@ func (router *Router) routes() {
 	if router.retention != nil {
 		router.mux.Method(stdhttp.MethodDelete, "/v1/analyses/{analysisID}", writer(router.handleDeleteAnalysis))
 		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/analyses", admin(router.handlePurgeAnalyses))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/retention/policy", admin(router.handleRetentionPolicy))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/retention/preview", admin(router.handleRetentionPreview))
 	}
 	if router.users != nil {
 		router.mux.Method(stdhttp.MethodGet, "/v1/admin/users", admin(router.handleListUsers))
@@ -212,6 +232,35 @@ func (router *Router) handleHealth(writer stdhttp.ResponseWriter, request *stdht
 	startedAt := time.Now()
 	requestID := router.requestID(request)
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, HealthResponse{Status: "ok"})
+}
+
+func (router *Router) handleLiveness(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, HealthResponse{Status: "ok"})
+}
+
+func (router *Router) handleReadiness(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+	result := router.options.ReadinessChecker.Run(request.Context())
+	status := stdhttp.StatusOK
+	if result.Status != health.StatusOk {
+		status = stdhttp.StatusServiceUnavailable
+	}
+	router.writeSuccess(writer, requestID, startedAt, status, toReadinessResponseDto(result))
+}
+
+func (router *Router) handleNotFound(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+	router.writeError(writer, requestID, startedAt, stdhttp.StatusNotFound, "not_found", "route not found")
+}
+
+func (router *Router) handleMethodNotAllowed(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+	router.writeError(writer, requestID, startedAt, stdhttp.StatusMethodNotAllowed, "method_not_allowed", "method is not allowed for this route")
 }
 
 func (router *Router) handleCapabilities(writer stdhttp.ResponseWriter, request *stdhttp.Request) {

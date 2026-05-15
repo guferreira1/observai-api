@@ -43,6 +43,18 @@ func (repository *AnalysisRetentionRepository) DeleteByID(ctx context.Context, i
 	return int(affected), nil
 }
 
+// CountOlderThan counts analyses whose created_at is strictly before cutoff.
+func (repository *AnalysisRetentionRepository) CountOlderThan(ctx context.Context, cutoff time.Time) (count int, err error) {
+	startedAt := time.Now()
+	defer func() { repository.observe("count_analyses_older_than", startedAt, err) }()
+
+	total, err := repository.queries.CountAnalysesOlderThan(ctx, pgtype.Timestamptz{Time: cutoff.UTC(), Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("count analyses older than: %w", err)
+	}
+	return int(total), nil
+}
+
 // DeleteOlderThan removes every analysis whose created_at is strictly before cutoff.
 func (repository *AnalysisRetentionRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (rowsAffected int, err error) {
 	startedAt := time.Now()
@@ -53,6 +65,22 @@ func (repository *AnalysisRetentionRepository) DeleteOlderThan(ctx context.Conte
 		return 0, fmt.Errorf("delete analyses older than: %w", err)
 	}
 	return int(affected), nil
+}
+
+// CountExceedingNewest counts analyses that would be deleted when preserving
+// the supplied number of newest entries.
+func (repository *AnalysisRetentionRepository) CountExceedingNewest(ctx context.Context, keep int) (count int, err error) {
+	startedAt := time.Now()
+	defer func() { repository.observe("count_analyses_exceeding_newest", startedAt, err) }()
+
+	if keep <= 0 {
+		return 0, nil
+	}
+	total, err := repository.queries.CountAnalysesExceedingNewest(ctx, int32(keep))
+	if err != nil {
+		return 0, fmt.Errorf("count analyses exceeding newest: %w", err)
+	}
+	return int(total), nil
 }
 
 // DeleteKeepingNewest preserves the supplied number of newest analyses and

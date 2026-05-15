@@ -110,8 +110,14 @@ func (tester *Tester) run(ctx context.Context, method, baseURL, path, credential
 		return ports.ProviderTestResult{LatencyMs: latencyMs, Error: inboundhttp.SanitizeExternalMessage(err.Error())}
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+		return ports.ProviderTestResult{LatencyMs: latencyMs, Code: "provider_auth_failed", Error: "provider authentication failed"}
+	}
 	if response.StatusCode >= 500 {
-		return ports.ProviderTestResult{LatencyMs: latencyMs, Error: fmt.Sprintf("upstream returned status %d", response.StatusCode)}
+		return ports.ProviderTestResult{LatencyMs: latencyMs, Code: "provider_unreachable", Error: fmt.Sprintf("upstream returned status %d", response.StatusCode)}
+	}
+	if response.StatusCode >= 400 {
+		return ports.ProviderTestResult{LatencyMs: latencyMs, Code: "provider_probe_failed", Error: fmt.Sprintf("upstream returned status %d", response.StatusCode)}
 	}
 	return ports.ProviderTestResult{Reached: true, LatencyMs: latencyMs}
 }

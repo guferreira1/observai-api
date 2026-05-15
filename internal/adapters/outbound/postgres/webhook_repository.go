@@ -102,6 +102,27 @@ func (repository *WebhookRepository) ListActive(ctx context.Context, event strin
 	return out, nil
 }
 
+// Update replaces mutable webhook subscription fields.
+func (repository *WebhookRepository) Update(ctx context.Context, webhook domain.Webhook) (err error) {
+	startedAt := time.Now()
+	defer func() { repository.observe("update_webhook", startedAt, err) }()
+
+	_, err = repository.queries.UpdateWebhookSubscription(ctx, sqlc.UpdateWebhookSubscriptionParams{
+		ID:     webhook.ID,
+		Name:   webhook.Name,
+		Url:    webhook.URL,
+		Secret: webhook.Secret,
+		Event:  webhook.Event,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrWebhookNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("update webhook: %w", err)
+	}
+	return nil
+}
+
 // Disable marks a webhook subscription as disabled.
 func (repository *WebhookRepository) Disable(ctx context.Context, id string) (err error) {
 	startedAt := time.Now()

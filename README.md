@@ -305,6 +305,13 @@ API:
 http://localhost:8080
 ```
 
+Swagger UI:
+
+```txt
+http://localhost:8080/docs
+http://localhost:8080/swagger
+```
+
 Health check:
 
 ```txt

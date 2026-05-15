@@ -31,33 +31,53 @@ func NewUser(repository ports.UserRepository, refresh ports.RefreshTokenReposito
 //
 // The password is hashed with bcrypt before being persisted.
 func (useCase *User) Create(ctx context.Context, email, password string, role domain.Role) (domain.User, error) {
-	cleanedEmail, err := normalizeEmail(email)
+	return useCase.CreateWithOptions(ctx, UserCreateRequest{
+		Email:    email,
+		Password: password,
+		Role:     role,
+	})
+}
+
+// UserCreateRequest carries admin-facing user provisioning options.
+type UserCreateRequest struct {
+	Email              string
+	Password           string
+	Role               domain.Role
+	MustChangePassword bool
+	Preferences        domain.UserPreferences
+}
+
+// CreateWithOptions provisions a user with optional security and preference flags.
+func (useCase *User) CreateWithOptions(ctx context.Context, request UserCreateRequest) (domain.User, error) {
+	cleanedEmail, err := normalizeEmail(request.Email)
 	if err != nil {
 		return domain.User{}, err
 	}
-	if len(password) < minPasswordLength {
+	if len(request.Password) < minPasswordLength {
 		return domain.User{}, fmt.Errorf("%w: password must be at least %d characters", domain.ErrInvalidUser, minPasswordLength)
 	}
-	if !domain.IsValidRole(role) {
-		return domain.User{}, fmt.Errorf("%w: role %q is not supported", domain.ErrInvalidUser, role)
+	if !domain.IsValidRole(request.Role) {
+		return domain.User{}, fmt.Errorf("%w: role %q is not supported", domain.ErrInvalidUser, request.Role)
 	}
 	id, err := useCase.ids.NextID(ctx)
 	if err != nil {
 		return domain.User{}, fmt.Errorf("generate user id: %w", err)
 	}
-	hash, err := crypto.HashPassword(password, 0)
+	hash, err := crypto.HashPassword(request.Password, 0)
 	if err != nil {
 		return domain.User{}, fmt.Errorf("hash password: %w", err)
 	}
 	now := useCase.now().UTC()
 	user := domain.User{
-		ID:           id,
-		Email:        cleanedEmail,
-		PasswordHash: hash,
-		Role:         role,
-		IsActive:     true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                 id,
+		Email:              cleanedEmail,
+		PasswordHash:       hash,
+		Role:               request.Role,
+		IsActive:           true,
+		MustChangePassword: request.MustChangePassword,
+		Preferences:        domain.NormalizeUserPreferences(request.Preferences),
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 	if err := useCase.repository.Create(ctx, user); err != nil {
 		return domain.User{}, err
@@ -106,6 +126,15 @@ func (useCase *User) SetActive(ctx context.Context, id string, active bool) (dom
 	}
 	if !active && useCase.refresh != nil {
 		_ = useCase.refresh.RevokeAllForUser(ctx, id, now)
+	}
+	return useCase.repository.FindByID(ctx, id)
+}
+
+// SetMustChangePassword toggles the forced password-change flag.
+func (useCase *User) SetMustChangePassword(ctx context.Context, id string, mustChangePassword bool) (domain.User, error) {
+	now := useCase.now().UTC()
+	if err := useCase.repository.SetMustChangePassword(ctx, id, mustChangePassword, now); err != nil {
+		return domain.User{}, err
 	}
 	return useCase.repository.FindByID(ctx, id)
 }

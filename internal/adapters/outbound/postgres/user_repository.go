@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,13 +44,15 @@ func (repository *UserRepository) Create(ctx context.Context, user domain.User) 
 	defer func() { repository.observe("create_user", startedAt, err) }()
 
 	err = repository.queries.CreateUser(ctx, sqlc.CreateUserParams{
-		ID:           user.ID,
-		Email:        strings.ToLower(strings.TrimSpace(user.Email)),
-		PasswordHash: user.PasswordHash,
-		Role:         string(user.Role),
-		IsActive:     user.IsActive,
-		CreatedAt:    pgtype.Timestamptz{Time: user.CreatedAt, Valid: !user.CreatedAt.IsZero()},
-		UpdatedAt:    pgtype.Timestamptz{Time: user.UpdatedAt, Valid: !user.UpdatedAt.IsZero()},
+		ID:                 user.ID,
+		Email:              strings.ToLower(strings.TrimSpace(user.Email)),
+		PasswordHash:       user.PasswordHash,
+		Role:               string(user.Role),
+		IsActive:           user.IsActive,
+		MustChangePassword: user.MustChangePassword,
+		Preferences:        marshalUserPreferences(user.Preferences),
+		CreatedAt:          pgtype.Timestamptz{Time: user.CreatedAt, Valid: !user.CreatedAt.IsZero()},
+		UpdatedAt:          pgtype.Timestamptz{Time: user.UpdatedAt, Valid: !user.UpdatedAt.IsZero()},
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -73,7 +76,7 @@ func (repository *UserRepository) FindByID(ctx context.Context, id string) (user
 	if err != nil {
 		return domain.User{}, fmt.Errorf("find user: %w", err)
 	}
-	return rowToDomainUser(row.ID, row.Email, row.PasswordHash, row.Role, row.IsActive, row.CreatedAt, row.UpdatedAt, row.LastLoginAt), nil
+	return rowToDomainUser(row.ID, row.Email, row.PasswordHash, row.Role, row.IsActive, row.MustChangePassword, row.Preferences, row.CreatedAt, row.UpdatedAt, row.LastLoginAt), nil
 }
 
 // FindByEmail returns the user matching the supplied email (case-insensitive).
@@ -88,7 +91,7 @@ func (repository *UserRepository) FindByEmail(ctx context.Context, email string)
 	if err != nil {
 		return domain.User{}, fmt.Errorf("find user by email: %w", err)
 	}
-	return rowToDomainUser(row.ID, row.Email, row.PasswordHash, row.Role, row.IsActive, row.CreatedAt, row.UpdatedAt, row.LastLoginAt), nil
+	return rowToDomainUser(row.ID, row.Email, row.PasswordHash, row.Role, row.IsActive, row.MustChangePassword, row.Preferences, row.CreatedAt, row.UpdatedAt, row.LastLoginAt), nil
 }
 
 // List returns persisted users ordered by creation time, newest first.
@@ -105,7 +108,7 @@ func (repository *UserRepository) List(ctx context.Context, limit int, offset in
 	}
 	out := make([]domain.User, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, rowToDomainUser(row.ID, row.Email, row.PasswordHash, row.Role, row.IsActive, row.CreatedAt, row.UpdatedAt, row.LastLoginAt))
+		out = append(out, rowToDomainUser(row.ID, row.Email, row.PasswordHash, row.Role, row.IsActive, row.MustChangePassword, row.Preferences, row.CreatedAt, row.UpdatedAt, row.LastLoginAt))
 	}
 	return out, nil
 }
@@ -135,6 +138,18 @@ func (repository *UserRepository) UpdateProfile(ctx context.Context, id string, 
 		return fmt.Errorf("update user profile: %w", err)
 	}
 	return nil
+}
+
+// UpdatePreferences stores the user's UI preference projection.
+func (repository *UserRepository) UpdatePreferences(ctx context.Context, id string, preferences domain.UserPreferences, updatedAt time.Time) (err error) {
+	startedAt := time.Now()
+	defer func() { repository.observe("update_user_preferences", startedAt, err) }()
+
+	return repository.queries.UpdateUserPreferences(ctx, sqlc.UpdateUserPreferencesParams{
+		ID:          id,
+		Preferences: marshalUserPreferences(preferences),
+		UpdatedAt:   pgtype.Timestamptz{Time: updatedAt, Valid: true},
+	})
 }
 
 // UpdatePassword replaces a user's password hash.
@@ -170,6 +185,17 @@ func (repository *UserRepository) SetActive(ctx context.Context, id string, acti
 	})
 }
 
+// SetMustChangePassword toggles the forced password-change flag.
+func (repository *UserRepository) SetMustChangePassword(ctx context.Context, id string, mustChangePassword bool, updatedAt time.Time) (err error) {
+	startedAt := time.Now()
+	defer func() { repository.observe("set_user_must_change_password", startedAt, err) }()
+	return repository.queries.SetUserMustChangePassword(ctx, sqlc.SetUserMustChangePasswordParams{
+		ID:                 id,
+		MustChangePassword: mustChangePassword,
+		UpdatedAt:          pgtype.Timestamptz{Time: updatedAt, Valid: true},
+	})
+}
+
 // TouchLastLogin records the last successful login timestamp.
 func (repository *UserRepository) TouchLastLogin(ctx context.Context, id string, when time.Time) (err error) {
 	startedAt := time.Now()
@@ -188,13 +214,15 @@ func (repository *UserRepository) Delete(ctx context.Context, id string) (err er
 	return repository.queries.DeleteUser(ctx, id)
 }
 
-func rowToDomainUser(id, email, hash, role string, isActive bool, createdAt, updatedAt, lastLoginAt pgtype.Timestamptz) domain.User {
+func rowToDomainUser(id, email, hash, role string, isActive bool, mustChangePassword bool, preferences []byte, createdAt, updatedAt, lastLoginAt pgtype.Timestamptz) domain.User {
 	user := domain.User{
-		ID:           id,
-		Email:        email,
-		PasswordHash: hash,
-		Role:         domain.Role(role),
-		IsActive:     isActive,
+		ID:                 id,
+		Email:              email,
+		PasswordHash:       hash,
+		Role:               domain.Role(role),
+		IsActive:           isActive,
+		MustChangePassword: mustChangePassword,
+		Preferences:        unmarshalUserPreferences(preferences),
 	}
 	if createdAt.Valid {
 		user.CreatedAt = createdAt.Time.UTC()
@@ -207,4 +235,23 @@ func rowToDomainUser(id, email, hash, role string, isActive bool, createdAt, upd
 		user.LastLoginAt = &stamp
 	}
 	return user
+}
+
+func marshalUserPreferences(preferences domain.UserPreferences) []byte {
+	payload, err := json.Marshal(domain.NormalizeUserPreferences(preferences))
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return payload
+}
+
+func unmarshalUserPreferences(payload []byte) domain.UserPreferences {
+	if len(payload) == 0 {
+		return domain.NormalizeUserPreferences(domain.UserPreferences{})
+	}
+	var preferences domain.UserPreferences
+	if err := json.Unmarshal(payload, &preferences); err != nil {
+		return domain.NormalizeUserPreferences(domain.UserPreferences{})
+	}
+	return domain.NormalizeUserPreferences(preferences)
 }
