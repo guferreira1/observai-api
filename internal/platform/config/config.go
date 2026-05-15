@@ -189,7 +189,7 @@ type CookieConfig struct {
 // RedactionConfig drives which redaction rules participate in the chain
 // applied to evidence before it reaches the LLM.
 //
-// Rules is a comma-separated list (e.g. "email,bearer,jwt,ipv4,credit_card,cpf").
+// Rules is a comma-separated list (e.g. "email,bearer,jwt,ipv4").
 // An empty value enables every supported rule. Unknown rules are ignored.
 type RedactionConfig struct {
 	Rules string `yaml:"rules" env:"OBSERVAI_REDACTION_RULES"`

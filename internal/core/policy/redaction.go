@@ -30,15 +30,11 @@ const (
 	RuleEmail RedactorRule = "email"
 	// RuleIPv4 redacts IPv4 literals.
 	RuleIPv4 RedactorRule = "ipv4"
-	// RuleCreditCard redacts Luhn-valid card-shaped digit sequences.
-	RuleCreditCard RedactorRule = "credit_card"
-	// RuleCPF redacts Brazilian CPF numbers.
-	RuleCPF RedactorRule = "cpf"
 )
 
 // AllRedactorRules lists the rules wired into the default chain.
 func AllRedactorRules() []RedactorRule {
-	return []RedactorRule{RuleBearerToken, RuleJWT, RuleEmail, RuleIPv4, RuleCreditCard, RuleCPF}
+	return []RedactorRule{RuleBearerToken, RuleJWT, RuleEmail, RuleIPv4}
 }
 
 // IsValidRedactorRule reports whether rule is a known value.
@@ -137,8 +133,6 @@ func defaultRedactorRegistry() map[RedactorRule]EvidenceRedactor {
 		RuleJWT:         NewJWTRedactor(),
 		RuleEmail:       NewEmailRedactor(),
 		RuleIPv4:        NewIPv4Redactor(),
-		RuleCreditCard:  NewCreditCardRedactor(),
-		RuleCPF:         NewCPFRedactor(),
 	}
 }
 
@@ -163,14 +157,6 @@ var ipv4Pattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
 // jwtPattern matches the canonical JWT shape header.payload.signature where
 // each segment is base64url-encoded.
 var jwtPattern = regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b`)
-
-// creditCardPattern matches 13-19 digit sequences that can be separated by
-// spaces or dashes (the common visual formats). Luhn validation in the
-// redactor reduces false positives on long numeric IDs.
-var creditCardPattern = regexp.MustCompile(`\b(?:\d[ \-]?){12,18}\d\b`)
-
-// cpfPattern matches Brazilian CPF in xxx.xxx.xxx-xx or 11-digit form.
-var cpfPattern = regexp.MustCompile(`\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b`)
 
 // EmailRedactor replaces email addresses with [redacted-email].
 type EmailRedactor struct{}
@@ -245,60 +231,6 @@ func (JWTRedactor) Redact(evidence domain.Evidence) (domain.Evidence, bool) {
 	return evidence, fired
 }
 
-// CreditCardRedactor replaces Luhn-valid card-shaped digit sequences with [redacted-card].
-type CreditCardRedactor struct{}
-
-// NewCreditCardRedactor builds a CreditCardRedactor.
-func NewCreditCardRedactor() CreditCardRedactor { return CreditCardRedactor{} }
-
-// Name returns the rule identifier.
-func (CreditCardRedactor) Name() string { return string(RuleCreditCard) }
-
-// Redact implements EvidenceRedactor.
-func (CreditCardRedactor) Redact(evidence domain.Evidence) (domain.Evidence, bool) {
-	fired := false
-	updatedSummary, summaryFired := scrubCreditCard(evidence.Summary)
-	if summaryFired {
-		evidence.Summary = updatedSummary
-		fired = true
-	}
-	updatedReference, refFired := scrubCreditCard(evidence.Reference)
-	if refFired {
-		evidence.Reference = updatedReference
-		fired = true
-	}
-	if len(evidence.Attributes) > 0 {
-		scrubbed := make(map[string]string, len(evidence.Attributes))
-		for key, value := range evidence.Attributes {
-			updated, attrFired := scrubCreditCard(value)
-			scrubbed[key] = updated
-			if attrFired {
-				fired = true
-			}
-		}
-		evidence.Attributes = scrubbed
-	}
-	return evidence, fired
-}
-
-// CPFRedactor replaces Brazilian CPF numbers with [redacted-cpf].
-type CPFRedactor struct{}
-
-// NewCPFRedactor builds a CPFRedactor.
-func NewCPFRedactor() CPFRedactor { return CPFRedactor{} }
-
-// Name returns the rule identifier.
-func (CPFRedactor) Name() string { return string(RuleCPF) }
-
-// Redact implements EvidenceRedactor.
-func (CPFRedactor) Redact(evidence domain.Evidence) (domain.Evidence, bool) {
-	fired := false
-	evidence.Summary, fired = replaceAndTrack(evidence.Summary, cpfPattern, "[redacted-cpf]", fired)
-	evidence.Reference, fired = replaceAndTrack(evidence.Reference, cpfPattern, "[redacted-cpf]", fired)
-	evidence.Attributes, fired = scrubAttributes(evidence.Attributes, cpfPattern, "[redacted-cpf]", fired)
-	return evidence, fired
-}
-
 func replaceAndTrack(value string, pattern *regexp.Regexp, replacement string, alreadyFired bool) (string, bool) {
 	if value == "" {
 		return value, alreadyFired
@@ -307,50 +239,6 @@ func replaceAndTrack(value string, pattern *regexp.Regexp, replacement string, a
 		return value, alreadyFired
 	}
 	return pattern.ReplaceAllString(value, replacement), true
-}
-
-func scrubCreditCard(value string) (string, bool) {
-	fired := false
-	updated := creditCardPattern.ReplaceAllStringFunc(value, func(match string) string {
-		digits := keepDigits(match)
-		if len(digits) < 13 || len(digits) > 19 {
-			return match
-		}
-		if !luhnValid(digits) {
-			return match
-		}
-		fired = true
-		return "[redacted-card]"
-	})
-	return updated, fired
-}
-
-func keepDigits(value string) string {
-	out := make([]byte, 0, len(value))
-	for index := 0; index < len(value); index++ {
-		character := value[index]
-		if character >= '0' && character <= '9' {
-			out = append(out, character)
-		}
-	}
-	return string(out)
-}
-
-func luhnValid(digits string) bool {
-	sum := 0
-	double := false
-	for index := len(digits) - 1; index >= 0; index-- {
-		digit := int(digits[index] - '0')
-		if double {
-			digit *= 2
-			if digit > 9 {
-				digit -= 9
-			}
-		}
-		sum += digit
-		double = !double
-	}
-	return sum%10 == 0
 }
 
 func scrubAttributes(attributes map[string]string, pattern *regexp.Regexp, replacement string, alreadyFired bool) (map[string]string, bool) {

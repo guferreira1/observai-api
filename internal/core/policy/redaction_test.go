@@ -82,33 +82,6 @@ func TestJWTRedactorScrubsCanonicalToken(t *testing.T) {
 	}
 }
 
-func TestCreditCardRedactorScrubsLuhnValidNumber(t *testing.T) {
-	evidence := domain.Evidence{Summary: "charged card 4111 1111 1111 1111 today"}
-	redacted, fired := NewCreditCardRedactor().Redact(evidence)
-	if !fired || redacted.Summary == evidence.Summary {
-		t.Fatalf("expected card to be scrubbed, got fired=%v summary=%q", fired, redacted.Summary)
-	}
-}
-
-func TestCreditCardRedactorLeavesLuhnInvalidNumberUntouched(t *testing.T) {
-	evidence := domain.Evidence{Summary: "order id 1234567890123456"}
-	redacted, fired := NewCreditCardRedactor().Redact(evidence)
-	if fired || redacted.Summary != evidence.Summary {
-		t.Fatalf("non-Luhn number must not be scrubbed, got fired=%v summary=%q", fired, redacted.Summary)
-	}
-}
-
-func TestCPFRedactorScrubsFormattedAndUnformattedCPF(t *testing.T) {
-	formatted := domain.Evidence{Summary: "user 123.456.789-09 reported issue"}
-	unformatted := domain.Evidence{Summary: "user 12345678909 reported issue"}
-	if redacted, fired := NewCPFRedactor().Redact(formatted); !fired || redacted.Summary == formatted.Summary {
-		t.Fatalf("formatted CPF must be scrubbed: fired=%v summary=%q", fired, redacted.Summary)
-	}
-	if redacted, fired := NewCPFRedactor().Redact(unformatted); !fired || redacted.Summary == unformatted.Summary {
-		t.Fatalf("unformatted CPF must be scrubbed: fired=%v summary=%q", fired, redacted.Summary)
-	}
-}
-
 func TestChainRedactorIsNoOpWithoutRedactors(t *testing.T) {
 	chain := NewChainRedactor()
 	evidence := []domain.Evidence{{Summary: "anything"}}
