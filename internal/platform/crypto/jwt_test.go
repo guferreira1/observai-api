@@ -26,7 +26,7 @@ func TestNewJWTSignerRejectsShortSecret(t *testing.T) {
 
 func TestJWTSignerSignParseRoundTrip(t *testing.T) {
 	signer := mustSigner(t)
-	now := time.Now().UTC().Round(time.Second)
+	now := time.Now().UTC().Truncate(time.Second)
 	claims := JWTClaims{
 		Subject:   "user-1",
 		Role:      "admin",
