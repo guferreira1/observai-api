@@ -5,7 +5,7 @@
 # Stage 2 ships a minimal runtime image with CA certificates and the binary.
 
 ARG GO_VERSION=1.26
-ARG ALPINE_VERSION=3.20
+ARG ALPINE_VERSION=3.22
 
 FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
 
