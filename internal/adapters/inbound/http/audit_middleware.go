@@ -105,8 +105,9 @@ func auditMiddleware(useCase *usecase.AuditLog, logger *slog.Logger) func(stdhtt
 				Metadata:     annotation.Metadata,
 				CreatedAt:    time.Now().UTC(),
 			}
+			auditContext := context.WithoutCancel(request.Context())
 			go func() {
-				if err := useCase.Append(context.Background(), entry); err != nil {
+				if err := useCase.Append(auditContext, entry); err != nil {
 					logger.Warn("audit append failed", "error", err)
 				}
 			}()

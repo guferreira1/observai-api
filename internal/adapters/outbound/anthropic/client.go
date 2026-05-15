@@ -191,7 +191,7 @@ func (client *Client) Chat(ctx context.Context, request ChatRequest) (content st
 
 	messages := make([]messagesPayloadM, 0, len(request.Messages))
 	for _, message := range request.Messages {
-		messages = append(messages, messagesPayloadM{Role: message.Role, Content: message.Content})
+		messages = append(messages, messagesPayloadM(message))
 	}
 
 	payload := messagesPayload{

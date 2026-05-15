@@ -91,9 +91,7 @@ func (evidence Evidence) CorrelationKey() string {
 	return ""
 }
 
-// GroupEvidenceByCorrelation buckets evidence by correlation key. The
-// returned slice is sorted by group size descending so callers can show
-// the dominant correlations first.
+// CorrelatedEvidenceGroup buckets evidence by correlation key.
 type CorrelatedEvidenceGroup struct {
 	Key      string
 	Evidence []Evidence

@@ -4,7 +4,7 @@ run-name: API CI - ${{ github.ref_name }}
 "on":
   push:
     branches:
-      - "**"
+      - main
   pull_request:
     branches:
       - "**"
@@ -90,9 +90,9 @@ jobs:
         run: go vet ./...
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.12.1
           args: --timeout=5m
 
       - name: Validate sqlc configuration

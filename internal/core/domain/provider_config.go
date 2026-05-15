@@ -28,6 +28,8 @@ var ErrProviderConfigConflict = errors.New("provider configuration name already 
 // the API can resolve at runtime.
 type ObservabilityProviderType string
 
+// ProviderTypePrometheus and related constants identify supported
+// observability adapters.
 const (
 	ProviderTypePrometheus    ObservabilityProviderType = "prometheus"
 	ProviderTypeLoki          ObservabilityProviderType = "loki"
@@ -57,6 +59,7 @@ func IsValidObservabilityProviderType(value ObservabilityProviderType) bool {
 // LLMProviderType enumerates the LLM provider adapters the API can resolve.
 type LLMProviderType string
 
+// LLMProviderTypeOllama and related constants identify supported LLM adapters.
 const (
 	LLMProviderTypeOllama     LLMProviderType = "ollama"
 	LLMProviderTypeOpenAI     LLMProviderType = "openai"

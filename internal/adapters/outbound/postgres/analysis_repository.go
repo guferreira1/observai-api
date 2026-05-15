@@ -301,11 +301,6 @@ func (repository *AnalysisRepository) SaveExchange(ctx context.Context, question
 	return nil
 }
 
-// List returns persisted chat messages for an analysis honoring the supplied filter.
-//
-// Cursor (filter.Before) and limit are pushed down to SQL via a windowed
-// subquery so older messages can be fetched without scanning the entire
-// history. Messages are returned oldest-first as required by the chat use case.
 // FindMessage returns the chat message matching the supplied identifier.
 //
 // The id arrives from the HTTP layer as a string; the repository parses it
@@ -328,6 +323,11 @@ func (repository *AnalysisRepository) FindMessage(ctx context.Context, id string
 	return toDomainChatMessage(row)
 }
 
+// List returns persisted chat messages for an analysis honoring the supplied filter.
+//
+// Cursor (filter.Before) and limit are pushed down to SQL via a windowed
+// subquery so older messages can be fetched without scanning the entire
+// history. Messages are returned oldest-first as required by the chat use case.
 func (repository *AnalysisRepository) List(ctx context.Context, analysisID string, filter domain.ChatHistoryFilter) (messages []domain.ChatMessage, err error) {
 	startedAt := time.Now()
 	defer func() { repository.observe("list_chat_messages", startedAt, err) }()
