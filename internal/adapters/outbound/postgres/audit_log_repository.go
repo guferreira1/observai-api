@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -33,21 +34,29 @@ func (repository *AuditLogRepository) observe(operation string, startedAt time.T
 	repository.observer.Observe("postgres", operation, time.Since(startedAt), err)
 }
 
-// Append inserts a new entry.
+// Append inserts a new audit entry.
 func (repository *AuditLogRepository) Append(ctx context.Context, entry domain.AuditEntry) (err error) {
 	startedAt := time.Now()
 	defer func() { repository.observe("append_audit", startedAt, err) }()
 
+	metadata, err := encodeJSONMap(entry.Metadata)
+	if err != nil {
+		return fmt.Errorf("encode audit metadata: %w", err)
+	}
 	return repository.queries.AppendAuditEntry(ctx, sqlc.AppendAuditEntryParams{
-		RequestID:  entry.RequestID,
-		ApiKeyID:   entry.APIKeyID,
-		Actor:      entry.Actor,
-		Method:     entry.Method,
-		Path:       entry.Path,
-		Status:     int32(entry.Status),
-		DurationMs: entry.DurationMs,
-		Remote:     entry.Remote,
-		CreatedAt:  pgtype.Timestamptz{Time: entry.CreatedAt, Valid: !entry.CreatedAt.IsZero()},
+		RequestID:    entry.RequestID,
+		ApiKeyID:     entry.APIKeyID,
+		Actor:        entry.Actor,
+		Method:       entry.Method,
+		Path:         entry.Path,
+		Status:       int32(entry.Status),
+		DurationMs:   entry.DurationMs,
+		Remote:       entry.Remote,
+		Action:       entry.Action,
+		ResourceType: entry.ResourceType,
+		ResourceID:   entry.ResourceID,
+		Metadata:     metadata,
+		CreatedAt:    pgtype.Timestamptz{Time: entry.CreatedAt, Valid: !entry.CreatedAt.IsZero()},
 	})
 }
 
@@ -63,6 +72,10 @@ func (repository *AuditLogRepository) List(ctx context.Context, filter domain.Au
 
 	rows, err := repository.queries.ListAuditEntries(ctx, sqlc.ListAuditEntriesParams{
 		ApiKeyID:     optionalText(strings.TrimSpace(filter.APIKeyID)),
+		Actor:        optionalText(strings.TrimSpace(filter.Actor)),
+		Action:       optionalText(strings.TrimSpace(filter.Action)),
+		ResourceType: optionalText(strings.TrimSpace(filter.ResourceType)),
+		ResourceID:   optionalText(strings.TrimSpace(filter.ResourceID)),
 		FromAt:       optionalTimestamp(timeOrNil(filter.From)),
 		ToAt:         optionalTimestamp(timeOrNil(filter.To)),
 		ResultLimit:  int32(limit),
@@ -74,15 +87,23 @@ func (repository *AuditLogRepository) List(ctx context.Context, filter domain.Au
 	out := make([]domain.AuditEntry, 0, len(rows))
 	for _, row := range rows {
 		entry := domain.AuditEntry{
-			ID:         row.ID,
-			RequestID:  row.RequestID,
-			APIKeyID:   row.ApiKeyID,
-			Actor:      row.Actor,
-			Method:     row.Method,
-			Path:       row.Path,
-			Status:     int(row.Status),
-			DurationMs: row.DurationMs,
-			Remote:     row.Remote,
+			ID:           row.ID,
+			RequestID:    row.RequestID,
+			APIKeyID:     row.ApiKeyID,
+			Actor:        row.Actor,
+			Method:       row.Method,
+			Path:         row.Path,
+			Status:       int(row.Status),
+			DurationMs:   row.DurationMs,
+			Remote:       row.Remote,
+			Action:       row.Action,
+			ResourceType: row.ResourceType,
+			ResourceID:   row.ResourceID,
+		}
+		if len(row.Metadata) > 0 {
+			if err := json.Unmarshal(row.Metadata, &entry.Metadata); err != nil {
+				entry.Metadata = nil
+			}
 		}
 		if row.CreatedAt.Valid {
 			entry.CreatedAt = row.CreatedAt.Time.UTC()

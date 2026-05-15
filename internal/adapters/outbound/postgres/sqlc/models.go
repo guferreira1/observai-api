@@ -59,26 +59,100 @@ type AnalysisJob struct {
 }
 
 type ApiKey struct {
-	ID         string             `json:"id"`
-	Name       string             `json:"name"`
-	KeyHash    string             `json:"key_hash"`
-	Scope      string             `json:"scope"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
-	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	KeyHash     string             `json:"key_hash"`
+	Scope       string             `json:"scope"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+	Description pgtype.Text        `json:"description"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	Scopes      []string           `json:"scopes"`
 }
 
 type AuditLog struct {
-	ID         int64              `json:"id"`
-	RequestID  string             `json:"request_id"`
-	ApiKeyID   string             `json:"api_key_id"`
-	Actor      string             `json:"actor"`
-	Method     string             `json:"method"`
-	Path       string             `json:"path"`
-	Status     int32              `json:"status"`
-	DurationMs int64              `json:"duration_ms"`
-	Remote     string             `json:"remote"`
+	ID           int64              `json:"id"`
+	RequestID    string             `json:"request_id"`
+	ApiKeyID     string             `json:"api_key_id"`
+	Actor        string             `json:"actor"`
+	Method       string             `json:"method"`
+	Path         string             `json:"path"`
+	Status       int32              `json:"status"`
+	DurationMs   int64              `json:"duration_ms"`
+	Remote       string             `json:"remote"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Action       string             `json:"action"`
+	ResourceType string             `json:"resource_type"`
+	ResourceID   string             `json:"resource_id"`
+	Metadata     []byte             `json:"metadata"`
+}
+
+type LlmConfiguration struct {
+	ID               string             `json:"id"`
+	Type             string             `json:"type"`
+	Name             string             `json:"name"`
+	BaseUrl          string             `json:"base_url"`
+	Model            string             `json:"model"`
+	TimeoutMs        int32              `json:"timeout_ms"`
+	ApiKeyCiphertext pgtype.Text        `json:"api_key_ciphertext"`
+	Options          []byte             `json:"options"`
+	IsActive         bool               `json:"is_active"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ProviderConfiguration struct {
+	ID                    string             `json:"id"`
+	Type                  string             `json:"type"`
+	Name                  string             `json:"name"`
+	Url                   string             `json:"url"`
+	TimeoutMs             int32              `json:"timeout_ms"`
+	Signals               []string           `json:"signals"`
+	Options               []byte             `json:"options"`
+	CredentialsCiphertext pgtype.Text        `json:"credentials_ciphertext"`
+	IsActive              bool               `json:"is_active"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
+type RefreshToken struct {
+	ID         string             `json:"id"`
+	UserID     string             `json:"user_id"`
+	TokenHash  string             `json:"token_hash"`
+	FamilyID   string             `json:"family_id"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+	ReplacedBy pgtype.Text        `json:"replaced_by"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type User struct {
+	ID                 string             `json:"id"`
+	Email              string             `json:"email"`
+	PasswordHash       string             `json:"password_hash"`
+	Role               string             `json:"role"`
+	IsActive           bool               `json:"is_active"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	LastLoginAt        pgtype.Timestamptz `json:"last_login_at"`
+	MustChangePassword bool               `json:"must_change_password"`
+	Preferences        []byte             `json:"preferences"`
+}
+
+type WebhookDelivery struct {
+	ID             string             `json:"id"`
+	SubscriptionID string             `json:"subscription_id"`
+	Event          string             `json:"event"`
+	Payload        []byte             `json:"payload"`
+	Status         string             `json:"status"`
+	Attempt        int32              `json:"attempt"`
+	LastError      pgtype.Text        `json:"last_error"`
+	ResponseStatus pgtype.Int4        `json:"response_status"`
+	NextAttemptAt  pgtype.Timestamptz `json:"next_attempt_at"`
+	DeliveredAt    pgtype.Timestamptz `json:"delivered_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WebhookSubscription struct {

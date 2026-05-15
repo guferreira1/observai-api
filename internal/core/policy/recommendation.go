@@ -50,6 +50,7 @@ func (policy RecommendationPolicy) Apply(input RecommendationInput) []domain.Rec
 			continue
 		}
 		seen[key] = struct{}{}
+		suggested.EvidenceIDs = fallbackEvidenceIDs(suggested.EvidenceIDs, input.Evidence)
 		merged = append(merged, suggested)
 	}
 
@@ -63,6 +64,7 @@ func (policy RecommendationPolicy) Apply(input RecommendationInput) []domain.Rec
 				continue
 			}
 			seen[key] = struct{}{}
+			recommendation.EvidenceIDs = fallbackEvidenceIDs(recommendation.EvidenceIDs, input.Evidence)
 			merged = append(merged, recommendation)
 		}
 	}
@@ -71,6 +73,23 @@ func (policy RecommendationPolicy) Apply(input RecommendationInput) []domain.Rec
 		return merged[i].Priority < merged[j].Priority
 	})
 	return merged
+}
+
+func fallbackEvidenceIDs(existing []string, evidence []domain.Evidence) []string {
+	if len(existing) > 0 {
+		return existing
+	}
+	ids := make([]string, 0, min(len(evidence), 5))
+	for _, item := range evidence {
+		if strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		ids = append(ids, item.ID)
+		if len(ids) == 5 {
+			return ids
+		}
+	}
+	return ids
 }
 
 // NoEvidenceRecommendationRule suggests connecting a provider when the analysis
@@ -101,9 +120,10 @@ func (ErrorEvidenceRecommendationRule) Evaluate(input RecommendationInput) []dom
 		if mentionsError(evidence) {
 			return []domain.Recommendation{
 				{
-					Action:    "Inspect error logs and failing spans for the affected services in the requested window",
-					Rationale: "evidence contains error signals that likely point at the failing dependency",
-					Priority:  2,
+					Action:      "Inspect error logs and failing spans for the affected services in the requested window",
+					Rationale:   "evidence contains error signals that likely point at the failing dependency",
+					Priority:    2,
+					EvidenceIDs: errorEvidenceIDs(input.Evidence),
 				},
 			}
 		}
@@ -129,9 +149,10 @@ func (rule MultiServiceRecommendationRule) Evaluate(input RecommendationInput) [
 	}
 	return []domain.Recommendation{
 		{
-			Action:    "Map upstream/downstream dependencies and correlate spans across the affected services",
-			Rationale: "multiple services are involved, so the root cause is more likely in a shared dependency or call path",
-			Priority:  3,
+			Action:      "Map upstream/downstream dependencies and correlate spans across the affected services",
+			Rationale:   "multiple services are involved, so the root cause is more likely in a shared dependency or call path",
+			Priority:    3,
+			EvidenceIDs: serviceEvidenceIDs(input.Evidence),
 		},
 	}
 }
@@ -166,4 +187,19 @@ func (MissingSignalRecommendationRule) Evaluate(input RecommendationInput) []dom
 
 func recommendationKey(action string) string {
 	return strings.ToLower(strings.TrimSpace(action))
+}
+
+func errorEvidenceIDs(evidence []domain.Evidence) []string {
+	ids := make([]string, 0)
+	for _, item := range evidence {
+		if !mentionsError(item) || strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		ids = append(ids, item.ID)
+	}
+	return ids
+}
+
+func serviceEvidenceIDs(evidence []domain.Evidence) []string {
+	return fallbackEvidenceIDs(nil, evidence)
 }

@@ -44,29 +44,42 @@ func (repository *APIKeyRepository) Create(ctx context.Context, key domain.APIKe
 	startedAt := time.Now()
 	defer func() { repository.observe("create_api_key", startedAt, err) }()
 
-	return repository.queries.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
+	scopes := make([]string, 0, len(key.Scopes))
+	for _, scope := range key.Scopes {
+		scopes = append(scopes, string(scope))
+	}
+
+	params := sqlc.CreateAPIKeyParams{
 		ID:        key.ID,
 		Name:      key.Name,
 		KeyHash:   key.Hash,
-		Scope:     string(key.Scope),
+		Scope:     legacyScopeFromScopes(key.Scopes),
+		Scopes:    scopes,
 		CreatedAt: pgtype.Timestamptz{Time: key.CreatedAt, Valid: !key.CreatedAt.IsZero()},
-	})
+	}
+	if key.Description != "" {
+		params.Description = pgtype.Text{String: key.Description, Valid: true}
+	}
+	if key.ExpiresAt != nil {
+		params.ExpiresAt = pgtype.Timestamptz{Time: *key.ExpiresAt, Valid: true}
+	}
+	return repository.queries.CreateAPIKey(ctx, params)
 }
 
-// FindByHash returns the API key matching the supplied hash. Revoked keys
-// are ignored (treated as not found).
+// FindByHash returns the API key matching the supplied hash, including
+// revoked or expired entries so the use case can classify them.
 func (repository *APIKeyRepository) FindByHash(ctx context.Context, hash string) (key domain.APIKey, err error) {
 	startedAt := time.Now()
 	defer func() { repository.observe("find_api_key_by_hash", startedAt, err) }()
 
 	row, err := repository.queries.FindAPIKeyByHash(ctx, hash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.APIKey{}, fmt.Errorf("%w", domain.ErrAPIKeyNotFound)
+		return domain.APIKey{}, domain.ErrAPIKeyNotFound
 	}
 	if err != nil {
 		return domain.APIKey{}, fmt.Errorf("find api key: %w", err)
 	}
-	return toDomainAPIKey(row.ID, row.Name, row.KeyHash, row.Scope, row.CreatedAt, row.LastUsedAt, row.RevokedAt), nil
+	return rowToDomainAPIKey(row.ID, row.Name, row.KeyHash, row.Scope, row.Scopes, row.Description, row.ExpiresAt, row.CreatedAt, row.LastUsedAt, row.RevokedAt), nil
 }
 
 // List returns persisted API keys ordered by creation time, newest first.
@@ -83,7 +96,7 @@ func (repository *APIKeyRepository) List(ctx context.Context, limit int, offset 
 	}
 	out := make([]domain.APIKey, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, toDomainAPIKey(row.ID, row.Name, row.KeyHash, row.Scope, row.CreatedAt, row.LastUsedAt, row.RevokedAt))
+		out = append(out, rowToDomainAPIKey(row.ID, row.Name, row.KeyHash, row.Scope, row.Scopes, row.Description, row.ExpiresAt, row.CreatedAt, row.LastUsedAt, row.RevokedAt))
 	}
 	return out, nil
 }
@@ -110,15 +123,24 @@ func (repository *APIKeyRepository) TouchLastUsed(ctx context.Context, id string
 	})
 }
 
-func toDomainAPIKey(id, name, hash, scope string, createdAt, lastUsedAt, revokedAt pgtype.Timestamptz) domain.APIKey {
+func rowToDomainAPIKey(id, name, hash, _ string, scopes []string, description pgtype.Text, expiresAt, createdAt, lastUsedAt, revokedAt pgtype.Timestamptz) domain.APIKey {
 	key := domain.APIKey{
-		ID:    id,
-		Name:  name,
-		Hash:  hash,
-		Scope: domain.APIKeyScope(scope),
+		ID:   id,
+		Name: name,
+		Hash: hash,
+	}
+	if description.Valid {
+		key.Description = description.String
+	}
+	for _, scope := range scopes {
+		key.Scopes = append(key.Scopes, domain.APIKeyScope(scope))
 	}
 	if createdAt.Valid {
 		key.CreatedAt = createdAt.Time.UTC()
+	}
+	if expiresAt.Valid {
+		stamp := expiresAt.Time.UTC()
+		key.ExpiresAt = &stamp
 	}
 	if lastUsedAt.Valid {
 		stamp := lastUsedAt.Time.UTC()
@@ -129,4 +151,16 @@ func toDomainAPIKey(id, name, hash, scope string, createdAt, lastUsedAt, revoked
 		key.RevokedAt = &stamp
 	}
 	return key
+}
+
+// legacyScopeFromScopes derives a value for the legacy `scope` column from
+// the fine-grained scope set. The column is no longer authoritative but is
+// kept populated so downgrades and historical queries continue to work.
+func legacyScopeFromScopes(scopes []domain.APIKeyScope) string {
+	for _, scope := range scopes {
+		if scope == domain.APIKeyScopeAdminWrite || scope == domain.APIKeyScopeAdminRead {
+			return "admin"
+		}
+	}
+	return "default"
 }

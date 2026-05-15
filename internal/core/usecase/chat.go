@@ -168,6 +168,30 @@ func (useCase *Chat) Ask(ctx context.Context, question domain.ChatQuestion) (dom
 	return answer, nil
 }
 
+// Regenerate re-asks the question carried by the supplied user message
+// against the current analysis context. The message must belong to the
+// supplied analysis and have role=user; assistant messages are rejected
+// with ErrChatMessageNotFound so callers cannot rerun the LLM with one
+// of its own previous answers.
+func (useCase *Chat) Regenerate(ctx context.Context, analysisID, messageID string) (domain.ChatAnswer, error) {
+	cleanedAnalysis := strings.TrimSpace(analysisID)
+	cleanedMessage := strings.TrimSpace(messageID)
+	if cleanedAnalysis == "" || cleanedMessage == "" {
+		return domain.ChatAnswer{}, fmt.Errorf("%w: analysis and message id are required", domain.ErrChatMessageNotFound)
+	}
+	message, err := useCase.history.FindMessage(ctx, cleanedMessage)
+	if err != nil {
+		return domain.ChatAnswer{}, err
+	}
+	if message.AnalysisID != cleanedAnalysis || message.Role != domain.ChatRoleUser {
+		return domain.ChatAnswer{}, domain.ErrChatMessageNotFound
+	}
+	return useCase.Ask(ctx, domain.ChatQuestion{
+		AnalysisID: cleanedAnalysis,
+		Question:   message.Content,
+	})
+}
+
 // ChatStreamEvent describes a single event emitted by AskStream.
 //
 // Frontends consume an ordered stream of events: `token` events carry partial

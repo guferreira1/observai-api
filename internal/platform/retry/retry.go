@@ -86,15 +86,15 @@ func backoff(policy Policy, attempt int) time.Duration {
 	if base <= 0 {
 		base = 100 * time.Millisecond
 	}
-	cap := policy.MaxDelay
-	if cap <= 0 {
-		cap = 2 * time.Second
+	delay := policy.MaxDelay
+	if delay <= 0 {
+		delay = 2 * time.Second
 	}
 
 	scale := time.Duration(1) << uint(attempt-1)
 	exp := base * scale
-	if exp <= 0 || exp > cap {
-		exp = cap
+	if exp <= 0 || exp > delay {
+		exp = delay
 	}
 	jitter := time.Duration(rand.Int64N(int64(exp)))
 	return base + jitter

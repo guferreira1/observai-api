@@ -46,7 +46,8 @@ Respond with a single JSON object that matches this schema exactly. No markdown,
     {
       "action": "string",
       "rationale": "string",
-      "priority": 1
+      "priority": 1,
+      "evidenceIds": ["string"]
     }
   ],
   "codeLevelInsights": ["string"],
@@ -63,6 +64,7 @@ Field rules:
 - `detectedAnomalies` lists short factual sentences anchored in evidence.
 - Each `possibleRootCauses[].evidence` string must be the `name` of an `Evidence` entry present in the user payload. Never invent evidence identifiers.
 - `recommendedActions[].priority` is an integer from `1` (most important) up to `5`. Do not use `0` or negative values. Lower priority items must depend on higher priority ones being inconclusive or insufficient.
+- `recommendedActions[].evidenceIds` must contain `Evidence.id` values from the user payload that support the action. Use `[]` only when the action is solely about collecting missing evidence.
 - `codeLevelInsights` references modules, functions, queries or configuration patterns only when the evidence supports it.
 - `missingEvidence` lists evidence types that would change the diagnosis if available.
 - Arrays may be empty (`[]`) when nothing applies, but the field must always be present.
@@ -101,8 +103,8 @@ User payload (abbreviated):
   "signals": ["metrics", "logs"],
   "context": "deploy completed at 07:55 UTC",
   "evidence": [
-    {"signal":"metrics","service":"checkout-api","name":"p95_latency_ms","summary":"p95 jumped from 180ms to 1.2s after 08:00","score":0.93},
-    {"signal":"logs","service":"checkout-api","name":"db_pool_exhausted","summary":"PoolExhaustedException × 142 between 08:02 and 08:18","score":0.88}
+    {"id":"ev-1","signal":"metrics","service":"checkout-api","name":"p95_latency_ms","summary":"p95 jumped from 180ms to 1.2s after 08:00","score":0.93},
+    {"id":"ev-2","signal":"logs","service":"checkout-api","name":"db_pool_exhausted","summary":"PoolExhaustedException × 142 between 08:02 and 08:18","score":0.88}
   ]
 }
 ```
@@ -127,8 +129,8 @@ Expected response:
     }
   ],
   "recommendedActions": [
-    {"action": "Compare pool size config across deploys", "rationale": "Verify the 07:55 release reduced the pool or increased concurrency", "priority": 1},
-    {"action": "Add a runtime metric for pool wait time", "rationale": "Confirm contention before tuning", "priority": 3}
+    {"action": "Compare pool size config across deploys", "rationale": "Verify the 07:55 release reduced the pool or increased concurrency", "priority": 1, "evidenceIds": ["ev-1", "ev-2"]},
+    {"action": "Add a runtime metric for pool wait time", "rationale": "Confirm contention before tuning", "priority": 3, "evidenceIds": ["ev-2"]}
   ],
   "codeLevelInsights": [
     "Review database client initialization in checkout-api for pool size and acquire timeout"

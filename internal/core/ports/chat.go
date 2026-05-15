@@ -14,6 +14,7 @@ import (
 type ChatHistoryRepository interface {
 	SaveExchange(ctx context.Context, question domain.ChatMessage, answer domain.ChatMessage) error
 	List(ctx context.Context, analysisID string, filter domain.ChatHistoryFilter) ([]domain.ChatMessage, error)
+	FindMessage(ctx context.Context, id string) (domain.ChatMessage, error)
 }
 
 // ChatFeedbackRepository persists user feedback on assistant chat answers.

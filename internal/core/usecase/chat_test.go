@@ -98,6 +98,54 @@ func TestChatWorksWithoutOptionalCacheAndHistory(t *testing.T) {
 	assert.Empty(t, messages)
 }
 
+func TestChatRegenerateReplaysUserMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := inmemory.NewAnalysisRepository()
+	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
+		ID:       "analysis-r",
+		Summary:  "checkout incident",
+		Evidence: []domain.Evidence{{ID: "ev_1", Name: "p95"}},
+	}))
+
+	useCase := NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, testfakes.NewChatResponder())
+	_, err := useCase.Ask(ctx, domain.ChatQuestion{AnalysisID: "analysis-r", Question: "Which evidence supports this analysis?"})
+	require.NoError(t, err)
+
+	messages, err := useCase.History(ctx, "analysis-r", domain.ChatHistoryFilter{})
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	userMessage := messages[0]
+
+	regen, err := useCase.Regenerate(ctx, "analysis-r", userMessage.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "analysis-r", regen.AnalysisID)
+
+	updated, _ := useCase.History(ctx, "analysis-r", domain.ChatHistoryFilter{})
+	assert.Len(t, updated, 4, "regenerate should append a new user+assistant pair")
+}
+
+func TestChatRegenerateRejectsAssistantMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := inmemory.NewAnalysisRepository()
+	require.NoError(t, repository.Save(ctx, domain.AnalysisResult{
+		ID:       "analysis-r2",
+		Evidence: []domain.Evidence{{ID: "ev_1"}},
+	}))
+	useCase := NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, testfakes.NewChatResponder())
+	_, err := useCase.Ask(ctx, domain.ChatQuestion{AnalysisID: "analysis-r2", Question: "Which evidence supports this analysis?"})
+	require.NoError(t, err)
+	messages, _ := useCase.History(ctx, "analysis-r2", domain.ChatHistoryFilter{})
+	assistantMessage := messages[1]
+
+	if _, err := useCase.Regenerate(ctx, "analysis-r2", assistantMessage.ID); !errors.Is(err, domain.ErrChatMessageNotFound) {
+		t.Fatalf("expected ErrChatMessageNotFound, got %v", err)
+	}
+}
+
 func TestChatScopePolicy(t *testing.T) {
 	t.Parallel()
 

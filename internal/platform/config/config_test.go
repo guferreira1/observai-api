@@ -56,6 +56,8 @@ prompts:
 
 	t.Setenv("OBSERVAI_CONFIG_FILE", configPath)
 	t.Setenv("OBSERVAI_API_PORT", "7070")
+	t.Setenv("OBSERVAI_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	t.Setenv("OBSERVAI_JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -81,6 +83,8 @@ func TestLoadProdRequiresProviderConfiguration(t *testing.T) {
 
 	_, err := Load()
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OBSERVAI_ENCRYPTION_KEY")
+	assert.Contains(t, err.Error(), "OBSERVAI_JWT_SECRET")
 	assert.Contains(t, err.Error(), "OBSERVAI_DATABASE_DSN")
 	assert.Contains(t, err.Error(), "OBSERVAI_REDIS_URL")
 	assert.Contains(t, err.Error(), "OBSERVAI_PROMETHEUS_URL")
@@ -95,10 +99,70 @@ func TestLoadProdAcceptsFullyConfiguredEnvironment(t *testing.T) {
 	t.Setenv("OBSERVAI_REDIS_URL", "redis://prod")
 	t.Setenv("OBSERVAI_PROMETHEUS_URL", "http://prometheus:9090")
 	t.Setenv("OBSERVAI_OLLAMA_URL", "http://ollama:11434")
+	t.Setenv("OBSERVAI_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	t.Setenv("OBSERVAI_JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, ModeProd, cfg.Mode)
+	assert.NotEmpty(t, cfg.EncryptionKey)
+}
+
+func TestLoadDevRequiresEncryptionKey(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	t.Setenv("OBSERVAI_MODE", "dev")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OBSERVAI_ENCRYPTION_KEY")
+	assert.Contains(t, err.Error(), "OBSERVAI_JWT_SECRET")
+	assert.NotContains(t, err.Error(), "OBSERVAI_DATABASE_DSN")
+}
+
+func TestLoadRejectsShortJWTSecret(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	t.Setenv("OBSERVAI_MODE", "dev")
+	t.Setenv("OBSERVAI_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	t.Setenv("OBSERVAI_JWT_SECRET", "short")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OBSERVAI_JWT_SECRET")
+}
+
+func TestLoadDevAcceptsEncryptionKey(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	t.Setenv("OBSERVAI_MODE", "dev")
+	t.Setenv("OBSERVAI_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	t.Setenv("OBSERVAI_JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, ModeDev, cfg.Mode)
+}
+
+func TestLoadRejectsMalformedEncryptionKey(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	t.Setenv("OBSERVAI_MODE", "dev")
+	t.Setenv("OBSERVAI_ENCRYPTION_KEY", "not-a-real-key")
+	t.Setenv("OBSERVAI_JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OBSERVAI_ENCRYPTION_KEY")
+}
+
+func TestLoadLocalDoesNotRequireEncryptionKey(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, ModeLocal, cfg.Mode)
+	assert.Empty(t, cfg.EncryptionKey)
 }
 
 func TestLoadMigratesLegacyPrometheusAndOllamaIntoProviderLists(t *testing.T) {
@@ -148,6 +212,8 @@ llm:
 `), 0o600))
 
 	t.Setenv("OBSERVAI_CONFIG_FILE", configPath)
+	t.Setenv("OBSERVAI_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	t.Setenv("OBSERVAI_JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -212,6 +278,13 @@ func allConfigEnvKeys() []string {
 		"OBSERVAI_OLLAMA_MODEL",
 		"OBSERVAI_OLLAMA_TIMEOUT",
 		"OBSERVAI_PROMPTS_DIR",
+		"OBSERVAI_ENCRYPTION_KEY",
+		"OBSERVAI_JWT_SECRET",
+		"OBSERVAI_JWT_ISSUER",
+		"OBSERVAI_JWT_ACCESS_TTL",
+		"OBSERVAI_JWT_REFRESH_TTL",
+		"OBSERVAI_AUTH_COOKIE_DOMAIN",
+		"OBSERVAI_AUTH_COOKIE_SECURE",
 	}
 }
 

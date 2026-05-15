@@ -23,19 +23,20 @@ const (
 
 // Analysis orchestrates observability evidence collection and analysis generation.
 type Analysis struct {
-	collector       ports.SignalCollector
-	generator       ports.AnalysisGenerator
-	repository      ports.AnalysisRepository
-	cache           ports.AnalysisContextCache
-	cacheTTL        time.Duration
-	ids             ports.IDGenerator
-	jobs            ports.AnalysisJobRepository
-	enqueuer        ports.JobEnqueuer
-	severity        policy.SeverityPolicy
-	recommendations policy.RecommendationPolicy
-	redaction       policy.ChainRedactor
-	notifier        AnalysisCompletionNotifier
-	now             func() time.Time
+	collector        ports.SignalCollector
+	generator        ports.AnalysisGenerator
+	repository       ports.AnalysisRepository
+	cache            ports.AnalysisContextCache
+	cacheTTL         time.Duration
+	ids              ports.IDGenerator
+	jobs             ports.AnalysisJobRepository
+	enqueuer         ports.JobEnqueuer
+	severity         policy.SeverityPolicy
+	evidenceSeverity policy.EvidenceSeverityPolicy
+	recommendations  policy.RecommendationPolicy
+	redaction        policy.ChainRedactor
+	notifier         AnalysisCompletionNotifier
+	now              func() time.Time
 
 	activeCancelsMu sync.Mutex
 	activeCancels   map[string]context.CancelFunc
@@ -59,17 +60,18 @@ func NewAnalysis(
 	}
 
 	return &Analysis{
-		collector:       collector,
-		generator:       generator,
-		repository:      repository,
-		cache:           cache,
-		cacheTTL:        cacheTTL,
-		ids:             ids,
-		severity:        policy.NewSeverityPolicy(),
-		recommendations: policy.NewRecommendationPolicy(),
-		redaction:       policy.NewDefaultRedactor(),
-		now:             time.Now,
-		activeCancels:   make(map[string]context.CancelFunc),
+		collector:        collector,
+		generator:        generator,
+		repository:       repository,
+		cache:            cache,
+		cacheTTL:         cacheTTL,
+		ids:              ids,
+		severity:         policy.NewSeverityPolicy(),
+		evidenceSeverity: policy.NewEvidenceSeverityPolicy(),
+		recommendations:  policy.NewRecommendationPolicy(),
+		redaction:        policy.NewDefaultRedactor(),
+		now:              time.Now,
+		activeCancels:    make(map[string]context.CancelFunc),
 	}
 }
 
@@ -97,6 +99,7 @@ func (useCase *Analysis) WithRedaction(redaction policy.ChainRedactor) *Analysis
 type AnalysisCompletionNotifier interface {
 	NotifyAnalysisCompleted(ctx context.Context, result domain.AnalysisResult)
 	NotifyAnalysisFailed(ctx context.Context, jobID string, request domain.AnalysisRequest, reason string)
+	NotifyAnalysisCanceled(ctx context.Context, jobID string, request domain.AnalysisRequest)
 }
 
 // WithCompletionNotifier wires a notifier invoked after RunAnalysisJob
@@ -269,6 +272,9 @@ func (useCase *Analysis) CancelJob(ctx context.Context, jobID string) (domain.An
 	if findErr != nil {
 		return domain.AnalysisJob{}, findErr
 	}
+	if useCase.notifier != nil {
+		useCase.notifier.NotifyAnalysisCanceled(context.Background(), canceled.ID, canceled.Request)
+	}
 	return canceled, nil
 }
 
@@ -317,6 +323,7 @@ func (useCase *Analysis) executeAnalyze(ctx context.Context, analysisID string, 
 
 	report(reporter, domain.PhaseNormalizing, 35)
 	assignEvidenceIDs(evidence)
+	useCase.evidenceSeverity.Apply(evidence)
 	relevant := policy.FilterEvidence(evidence, policy.RelevantEvidenceSpecification(request), maxLLMEvidenceItems)
 	relevant = useCase.redaction.RedactEvidence(relevant)
 

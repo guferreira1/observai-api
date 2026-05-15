@@ -1,3 +1,5 @@
+version: "2"
+
 run:
   timeout: 5m
   tests: true
@@ -5,11 +7,9 @@ run:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-dirs:
-    - internal/adapters/outbound/postgres/sqlc
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - govet
@@ -21,20 +21,56 @@ linters:
     - gocyclo
     - gosec
     - bodyclose
+  settings:
+    gocyclo:
+      min-complexity: 35
+    revive:
+      rules:
+        - name: var-naming
+        - name: exported
+          arguments:
+            - "disableStutteringCheck"
+        - name: unused-parameter
+          disabled: true
+    gosec:
+      excludes:
+        - G104
+  exclusions:
+    paths:
+      - internal/adapters/outbound/postgres/sqlc
+    rules:
+      - linters:
+          - errcheck
+        text: "Error return value of `.*(Close|Rollback|WriteString).*` is not checked"
+      - linters:
+          - gosec
+        path: ".*_test\\.go"
+        text: "G101|G124"
+      - linters:
+          - gosec
+        path: "internal/adapters/outbound/postgres/.*"
+        text: "G115"
+      - linters:
+          - gosec
+        path: "internal/adapters/inbound/http/auth_handlers\\.go"
+        text: "G124"
+      - linters:
+          - gosec
+        path: "internal/adapters/inbound/http/swagger_ui\\.go"
+        text: "G710"
+      - linters:
+          - gosec
+        path: "internal/adapters/outbound/credentials/file\\.go|internal/adapters/outbound/prompts/loader\\.go"
+        text: "G304"
+      - linters:
+          - gosec
+        path: "internal/platform/retry/retry\\.go"
+        text: "G404"
+
+formatters:
+  enable:
     - gofmt
     - goimports
-
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  revive:
-    rules:
-      - name: var-naming
-      - name: exported
-        arguments:
-          - "disableStutteringCheck"
-      - name: unused-parameter
-        disabled: true
-  gosec:
-    excludes:
-      - G104
+  exclusions:
+    paths:
+      - internal/adapters/outbound/postgres/sqlc

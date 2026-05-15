@@ -59,6 +59,15 @@ func (notifier *WebhookNotifier) NotifyAnalysisFailed(ctx context.Context, jobID
 	})
 }
 
+// NotifyAnalysisCanceled dispatches the analysis.canceled event.
+func (notifier *WebhookNotifier) NotifyAnalysisCanceled(ctx context.Context, jobID string, request domain.AnalysisRequest) {
+	notifier.dispatch(ctx, domain.WebhookEventAnalysisCanceled, map[string]any{
+		"jobId":            jobID,
+		"goal":             request.Goal,
+		"affectedServices": request.AffectedServices,
+	})
+}
+
 func (notifier *WebhookNotifier) dispatch(ctx context.Context, event string, data map[string]any) {
 	if notifier.subscriptions == nil {
 		return

@@ -7,6 +7,8 @@ relying on a runtime filesystem:
 
 - Source of truth: [`internal/adapters/inbound/http/openapi.yaml`](../internal/adapters/inbound/http/openapi.yaml)
 - Served at runtime: `GET /v1/openapi.yaml`
+- Swagger UI: `GET /docs`
+- Swagger UI alias: `GET /swagger`
 
 ## Preview and linting
 
@@ -17,6 +19,9 @@ npx --yes @redocly/cli@latest lint internal/adapters/inbound/http/openapi.yaml
 # Preview Redoc/Swagger UI locally
 npx --yes @redocly/cli@latest preview-docs internal/adapters/inbound/http/openapi.yaml
 ```
+
+When the API is running locally, open `http://localhost:8080/docs` to use the
+embedded Swagger UI served by the API process.
 
 ## Editing rules
 

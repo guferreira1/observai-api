@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/postgres/sqlc"
@@ -297,6 +299,28 @@ func (repository *AnalysisRepository) SaveExchange(ctx context.Context, question
 	}
 
 	return nil
+}
+
+// FindMessage returns the chat message matching the supplied identifier.
+//
+// The id arrives from the HTTP layer as a string; the repository parses it
+// into the underlying BIGSERIAL so the SQL lookup can use the primary key.
+func (repository *AnalysisRepository) FindMessage(ctx context.Context, id string) (message domain.ChatMessage, err error) {
+	startedAt := time.Now()
+	defer func() { repository.observe("find_chat_message", startedAt, err) }()
+
+	parsed, parseErr := strconv.ParseInt(strings.TrimSpace(id), 10, 64)
+	if parseErr != nil {
+		return domain.ChatMessage{}, fmt.Errorf("%w: invalid message id", domain.ErrChatMessageNotFound)
+	}
+	row, err := repository.queries.FindChatMessageByID(ctx, parsed)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ChatMessage{}, domain.ErrChatMessageNotFound
+		}
+		return domain.ChatMessage{}, fmt.Errorf("find chat message: %w", err)
+	}
+	return toDomainChatMessage(row)
 }
 
 // List returns persisted chat messages for an analysis honoring the supplied filter.

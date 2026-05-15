@@ -96,14 +96,14 @@ func (limiter *rateLimiter) evictStale(now time.Time) {
 }
 
 // rateLimitMiddleware enforces per-IP token-bucket throttling.
-func rateLimitMiddleware(limiter *rateLimiter) func(stdhttp.Handler) stdhttp.Handler {
+func rateLimitMiddleware(limiter *rateLimiter, provider providerSummaryProvider) func(stdhttp.Handler) stdhttp.Handler {
 	if limiter == nil {
 		return func(next stdhttp.Handler) stdhttp.Handler { return next }
 	}
 	return func(next stdhttp.Handler) stdhttp.Handler {
 		return stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			if !limiter.Allow(clientIP(request)) {
-				writeRateLimitedResponse(writer, requestIDFromContext(request.Context()))
+				writeRateLimitedResponse(writer, requestIDFromContext(request.Context()), middlewareProviderSummary(provider))
 				return
 			}
 			next.ServeHTTP(writer, request)
@@ -128,12 +128,9 @@ func clientIP(request *stdhttp.Request) string {
 	return address
 }
 
-func writeRateLimitedResponse(writer stdhttp.ResponseWriter, requestID string) {
-	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("Retry-After", "1")
-	if requestID != "" {
-		writer.Header().Set(requestIDHeader, requestID)
-	}
-	writer.WriteHeader(stdhttp.StatusTooManyRequests)
-	_, _ = writer.Write([]byte(`{"data":{"code":"rate_limited","message":"request rate exceeded; retry shortly"},"metadata":{"requestId":"` + requestID + `","provider":{"mode":"local"}}}`))
+func writeRateLimitedResponse(writer stdhttp.ResponseWriter, requestID string, provider ProviderSummary) {
+	writeMiddlewareErrorResponse(writer, requestID, stdhttp.StatusTooManyRequests, "1", ErrorResponse{
+		Code:    "rate_limited",
+		Message: "request rate exceeded; retry shortly",
+	}, provider)
 }

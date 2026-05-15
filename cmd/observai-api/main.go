@@ -12,9 +12,11 @@ import (
 
 	inboundhttp "github.com/guferreira1/observai-api/internal/adapters/inbound/http"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/credentials"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/providertest"
 	uuidadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/uuid"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 	"github.com/guferreira1/observai-api/internal/platform/config"
+	"github.com/guferreira1/observai-api/internal/platform/crypto"
 	"github.com/guferreira1/observai-api/internal/platform/dbmigrate"
 	"github.com/guferreira1/observai-api/internal/platform/health"
 	"github.com/guferreira1/observai-api/internal/platform/logger"
@@ -48,6 +50,7 @@ func main() {
 
 	metrics := telemetry.NewHTTPMetrics()
 	providerMetrics := telemetry.NewProviderMetrics(metrics.Registry())
+	_ = telemetry.NewQueueCacheMetrics(metrics.Registry())
 	metricsHandler := promhttp.HandlerFor(metrics.Registry(), promhttp.HandlerOpts{})
 
 	tracerCtx, tracerCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -85,34 +88,60 @@ func main() {
 		log.Error("provider initialization failed", "error", err)
 		os.Exit(1)
 	}
+	registries := newAdapterRegistries(providers)
 
 	analysisUseCase := usecase.NewAnalysis(
-		providers.collector,
-		providers.generator,
+		registries.collector,
+		registries.generator,
 		store.repository,
 		cache.contexts,
 		cfg.AnalysisContextCacheTTL,
 		ids,
-	).WithAsyncBackend(store.jobRepository, queue.enqueuer)
+	).WithAsyncBackend(store.jobRepository, queue.enqueuer).
+		WithRedaction(buildRedactionChain(cfg))
 
 	chatUseCase := usecase.NewChat(
 		store.repository,
 		cache.contexts,
 		cfg.AnalysisContextCacheTTL,
 		store.chatHistory,
-		providers.responder,
+		registries.responder,
 	).WithLocker(queue.locker).WithFeedbackRepository(store.chatFeedback)
 
-	traceUseCase := usecase.NewTrace(store.repository, providers.traces)
+	traceUseCase := usecase.NewTrace(store.repository, registries.traces)
 
 	var apiKeyUseCase *usecase.APIKey
 	if store.apiKeys != nil {
 		apiKeyUseCase = usecase.NewAPIKey(store.apiKeys, ids)
 	}
 
+	var (
+		jwtSigner   *crypto.JWTSigner
+		authUseCase *usecase.Auth
+		userUseCase *usecase.User
+	)
+	if jwtSecret := cfg.JWT.Secret; jwtSecret != "" && store.users != nil && store.refreshTokens != nil {
+		signer, err := crypto.NewJWTSigner([]byte(jwtSecret), cfg.JWT.Issuer)
+		if err != nil {
+			log.Error("jwt signer initialization failed", "error", err)
+			os.Exit(1)
+		}
+		jwtSigner = signer
+		authUseCase = usecase.NewAuth(store.users, store.refreshTokens, jwtSigner, ids, usecase.AuthOptions{
+			AccessTokenTTL:  cfg.JWT.AccessTokenTTL,
+			RefreshTokenTTL: cfg.JWT.RefreshTokenTTL,
+		})
+		userUseCase = usecase.NewUser(store.users, store.refreshTokens, ids)
+	} else if cfg.Mode != config.ModeLocal {
+		log.Error("user authentication requires database, jwt secret and user repository wiring")
+		os.Exit(1)
+	} else if jwtSecret == "" {
+		log.Warn("jwt secret not configured; user authentication endpoints disabled")
+	}
+
 	var webhookUseCase *usecase.WebhookSubscriptions
 	if store.webhooks != nil {
-		webhookUseCase = usecase.NewWebhookSubscriptions(store.webhooks, store.webhookDispatcher, ids)
+		webhookUseCase = usecase.NewWebhookSubscriptions(store.webhooks, store.webhookDeliveries, store.webhookDispatcher, ids)
 	}
 
 	var auditLogUseCase *usecase.AuditLog
@@ -129,7 +158,50 @@ func main() {
 		analysisUseCase.WithCompletionNotifier(usecase.NewWebhookNotifier(webhookUseCase, log))
 	}
 
-	checker := health.NewChecker(2*time.Second, buildHealthProbes(store, cache, providers)...)
+	var (
+		providerConfigUseCase *usecase.ProviderConfig
+		llmConfigUseCase      *usecase.LLMConfig
+	)
+	if store.providerConfigs != nil && store.llmConfigs != nil {
+		cipher, cipherErr := buildEncryptionCipher(cfg, log)
+		if cipherErr != nil {
+			log.Error("encryption cipher initialization failed", "error", cipherErr)
+			os.Exit(1)
+		}
+		tester := providertest.New()
+		providerConfigUseCase = usecase.NewProviderConfig(store.providerConfigs, cipher, tester, ids)
+		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, ids)
+
+		reloadDeps := factoryDependencies(cfg, log, providerMetrics, credentialStore)
+		reload := newAdapterReloader(cfg, log, reloadDeps, registries, providerConfigUseCase, llmConfigUseCase)
+		providerConfigUseCase.WithReloadHook(reload)
+		llmConfigUseCase.WithReloadHook(reload)
+		reload(context.Background())
+	}
+
+	var setupUseCase *usecase.Setup
+	if userUseCase != nil && store.users != nil {
+		inventory := providerInventoryFromStores(store, cfg)
+		setupUseCase = usecase.NewSetup(store.users, userUseCase, inventory)
+		if auditLogUseCase != nil {
+			setupUseCase.WithAuditLog(auditLogUseCase)
+		}
+	}
+
+	scheduler, schedulerErr := newSchedulerIfEnabled(cfg, log, retentionUseCase, webhookUseCase)
+	if schedulerErr != nil {
+		log.Error("scheduler initialization failed", "error", schedulerErr)
+		os.Exit(1)
+	}
+	if scheduler != nil {
+		if err := scheduler.Start(); err != nil {
+			log.Error("scheduler start failed", "error", err)
+			os.Exit(1)
+		}
+		defer scheduler.Stop()
+	}
+
+	checker := health.NewChecker(2*time.Second, buildHealthProbes(store, cache, providers, providerConfigUseCase, llmConfigUseCase)...)
 
 	capabilities := buildCapabilities(cfg, providers, version)
 
@@ -145,12 +217,27 @@ func main() {
 			StaticKeys: cfg.HTTPAuth.Keys,
 			AdminKeys:  cfg.HTTPAuth.AdminKeys,
 			Skip:       cfg.HTTPAuth.Skip,
-			Keys:       apiKeyUseCase,
+			APIKeys:    apiKeyUseCase,
+			Signer:     jwtSigner,
+			Users:      store.users,
 		},
-		Metrics:      metricsHandler,
-		Liveness:     health.LivenessHandler(),
-		Readiness:    health.ReadinessHandler(checker),
-		Capabilities: capabilities,
+		Cookies: inboundhttp.CookieConfig{
+			Domain: cfg.Cookies.Domain,
+			Secure: cfg.Cookies.Secure,
+		},
+		Sessions:         authUseCase,
+		Users:            userUseCase,
+		Setup:            setupUseCase,
+		ProviderConfigs:  providerConfigUseCase,
+		LLMConfigs:       llmConfigUseCase,
+		Metrics:          metricsHandler,
+		ReadinessChecker: checker,
+		Capabilities:     capabilities,
+		RetentionPolicy: inboundhttp.RetentionPolicyOptions{
+			Days:     cfg.Scheduler.RetentionDays,
+			Quantity: cfg.Scheduler.RetentionQuantity,
+			Cron:     cfg.Scheduler.RetentionCron,
+		},
 		Provider: inboundhttp.ProviderSummary{
 			Mode:          capabilities.Mode,
 			LLM:           capabilities.LLM.Provider,

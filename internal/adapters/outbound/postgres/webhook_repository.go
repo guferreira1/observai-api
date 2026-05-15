@@ -2,12 +2,14 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/postgres/sqlc"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/platform/observability"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -47,6 +49,21 @@ func (repository *WebhookRepository) Create(ctx context.Context, webhook domain.
 	})
 }
 
+// Find returns the webhook subscription matching the supplied identifier.
+func (repository *WebhookRepository) Find(ctx context.Context, id string) (webhook domain.Webhook, err error) {
+	startedAt := time.Now()
+	defer func() { repository.observe("find_webhook", startedAt, err) }()
+
+	row, err := repository.queries.FindWebhookSubscription(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Webhook{}, domain.ErrWebhookNotFound
+	}
+	if err != nil {
+		return domain.Webhook{}, fmt.Errorf("find webhook: %w", err)
+	}
+	return toDomainWebhook(row.ID, row.Name, row.Url, row.Secret, row.Event, row.CreatedAt, row.DisabledAt), nil
+}
+
 // List returns persisted webhooks newest first.
 func (repository *WebhookRepository) List(ctx context.Context, limit int, offset int) (webhooks []domain.Webhook, err error) {
 	startedAt := time.Now()
@@ -83,6 +100,27 @@ func (repository *WebhookRepository) ListActive(ctx context.Context, event strin
 		out = append(out, toDomainWebhook(row.ID, row.Name, row.Url, row.Secret, row.Event, row.CreatedAt, row.DisabledAt))
 	}
 	return out, nil
+}
+
+// Update replaces mutable webhook subscription fields.
+func (repository *WebhookRepository) Update(ctx context.Context, webhook domain.Webhook) (err error) {
+	startedAt := time.Now()
+	defer func() { repository.observe("update_webhook", startedAt, err) }()
+
+	_, err = repository.queries.UpdateWebhookSubscription(ctx, sqlc.UpdateWebhookSubscriptionParams{
+		ID:     webhook.ID,
+		Name:   webhook.Name,
+		Url:    webhook.URL,
+		Secret: webhook.Secret,
+		Event:  webhook.Event,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrWebhookNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("update webhook: %w", err)
+	}
+	return nil
 }
 
 // Disable marks a webhook subscription as disabled.

@@ -27,12 +27,13 @@ import (
 
 // ClientOptions configures the OpenAI-compatible HTTP client.
 type ClientOptions struct {
-	BaseURL     string
-	APIKey      string
-	Model       string
-	Timeout     time.Duration
-	Observer    observability.ProviderObserver
-	RetryPolicy retry.Policy
+	BaseURL          string
+	APIKey           string
+	AllowEmptyAPIKey bool
+	Model            string
+	Timeout          time.Duration
+	Observer         observability.ProviderObserver
+	RetryPolicy      retry.Policy
 }
 
 // Client talks to an OpenAI-compatible Chat Completions endpoint.
@@ -58,7 +59,8 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return nil, fmt.Errorf("openai base url must include scheme and host")
 	}
-	if strings.TrimSpace(opts.APIKey) == "" {
+	apiKey := strings.TrimSpace(opts.APIKey)
+	if apiKey == "" && !opts.AllowEmptyAPIKey {
 		return nil, errors.New("openai api key is required")
 	}
 	if strings.TrimSpace(opts.Model) == "" {
@@ -82,7 +84,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 
 	return &Client{
 		baseURL:     parsed,
-		apiKey:      opts.APIKey,
+		apiKey:      apiKey,
 		model:       opts.Model,
 		httpClient:  &http.Client{Timeout: timeout},
 		observer:    observer,
@@ -141,7 +143,7 @@ func (client *Client) Ping(ctx context.Context) (err error) {
 	if reqErr != nil {
 		return fmt.Errorf("build openai health request: %w", reqErr)
 	}
-	request.Header.Set("Authorization", "Bearer "+client.apiKey)
+	client.authorize(request)
 
 	response, doErr := client.httpClient.Do(request)
 	if doErr != nil {
@@ -209,7 +211,7 @@ func (client *Client) do(ctx context.Context, endpoint string, body []byte) (str
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+client.apiKey)
+	client.authorize(request)
 
 	response, err := client.httpClient.Do(request)
 	if err != nil {
@@ -240,6 +242,12 @@ func (client *Client) do(ctx context.Context, endpoint string, body []byte) (str
 		return "", fmt.Errorf("openai response contained no choices")
 	}
 	return parsed.Choices[0].Message.Content, nil
+}
+
+func (client *Client) authorize(request *http.Request) {
+	if client.apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+client.apiKey)
+	}
 }
 
 type transientError struct{ err error }

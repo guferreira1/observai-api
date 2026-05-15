@@ -7,7 +7,7 @@ import (
 )
 
 func TestAuthMiddlewareAllowsRequestWithValidBearerToken(t *testing.T) {
-	handler := authMiddleware(AuthConfig{StaticKeys: []string{"secret"}})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := authMiddleware(AuthConfig{StaticKeys: []string{"secret"}}, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -22,7 +22,7 @@ func TestAuthMiddlewareAllowsRequestWithValidBearerToken(t *testing.T) {
 }
 
 func TestAuthMiddlewareRejectsRequestWithoutHeader(t *testing.T) {
-	handler := authMiddleware(AuthConfig{StaticKeys: []string{"secret"}})(http.NotFoundHandler())
+	handler := authMiddleware(AuthConfig{StaticKeys: []string{"secret"}}, nil)(http.NotFoundHandler())
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/analyses", nil)
 	response := httptest.NewRecorder()
@@ -34,7 +34,7 @@ func TestAuthMiddlewareRejectsRequestWithoutHeader(t *testing.T) {
 }
 
 func TestAuthMiddlewareRejectsBadCredentials(t *testing.T) {
-	handler := authMiddleware(AuthConfig{StaticKeys: []string{"secret"}})(http.NotFoundHandler())
+	handler := authMiddleware(AuthConfig{StaticKeys: []string{"secret"}}, nil)(http.NotFoundHandler())
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/analyses", nil)
 	request.Header.Set("Authorization", "Bearer wrong")
@@ -48,7 +48,7 @@ func TestAuthMiddlewareRejectsBadCredentials(t *testing.T) {
 
 func TestAuthMiddlewareIsNoopWhenNoKeysConfigured(t *testing.T) {
 	called := false
-	handler := authMiddleware(AuthConfig{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := authMiddleware(AuthConfig{}, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -63,11 +63,11 @@ func TestAuthMiddlewareIsNoopWhenNoKeysConfigured(t *testing.T) {
 }
 
 func TestAuthMiddlewareSkipsOperationalPaths(t *testing.T) {
-	handler := authMiddleware(AuthConfig{StaticKeys: []string{"secret"}})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := authMiddleware(AuthConfig{StaticKeys: []string{"secret"}}, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/health"} {
+	for _, path := range []string{"/healthz", "/readyz", "/metrics", "/health", "/v1/openapi.yaml", "/docs", "/docs/swagger-ui.css", "/swagger", "/swagger/swagger-ui.css"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)

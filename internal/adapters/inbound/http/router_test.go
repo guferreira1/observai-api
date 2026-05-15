@@ -2,6 +2,7 @@ package http
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/testfakes"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
+	"github.com/guferreira1/observai-api/internal/platform/health"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -116,7 +118,14 @@ func TestRouterReturnsAnalysisByID(t *testing.T) {
 	var payload WrapperDtoResponde[AnalysisResponseDto]
 	require.NoError(t, json.Unmarshal(getResponse.Body.Bytes(), &payload))
 	assert.Equal(t, "analysis-000001", payload.Data.ID)
+	assert.Equal(t, "analysis-000001", payload.Data.JobID)
 	assert.Equal(t, "high", payload.Data.Severity)
+	require.NotEmpty(t, payload.Data.Evidence)
+	assert.NotEmpty(t, payload.Data.Evidence[0].Severity)
+	assert.NotEmpty(t, payload.Data.Evidence[0].CorrelationID)
+	assert.NotEmpty(t, payload.Data.Evidence[0].TraceID)
+	require.NotEmpty(t, payload.Data.RecommendedActions)
+	assert.NotEmpty(t, payload.Data.RecommendedActions[0].EvidenceIDs)
 	assert.Equal(t, "fake", payload.Metadata.Provider.LLM)
 }
 
@@ -674,6 +683,127 @@ func TestRouterExposesCapabilities(t *testing.T) {
 	assert.Equal(t, int64(5000), payload.Data.Limits.HTTPRequestTimeoutMs)
 	assert.Equal(t, "local", payload.Metadata.Provider.Mode)
 	assert.Equal(t, "fake", payload.Metadata.Provider.LLM)
+}
+
+func TestRouterHealthzAndReadyzUseEnvelope(t *testing.T) {
+	t.Parallel()
+
+	checker := health.NewChecker(time.Second, health.ProbeFunc{
+		ProbeName: "database",
+		Fn:        func(context.Context) error { return nil },
+	}, health.ProbeFunc{
+		ProbeName: "redis",
+		Fn:        func(context.Context) error { return nil },
+	})
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		ReadinessChecker: checker,
+	})
+
+	healthRequest := httptest.NewRequest(stdhttp.MethodGet, "/healthz", nil)
+	healthResponse := httptest.NewRecorder()
+	router.ServeHTTP(healthResponse, healthRequest)
+	require.Equal(t, stdhttp.StatusOK, healthResponse.Code)
+
+	var healthPayload WrapperDtoResponde[HealthResponse]
+	require.NoError(t, json.Unmarshal(healthResponse.Body.Bytes(), &healthPayload))
+	assert.Equal(t, "ok", healthPayload.Data.Status)
+	assert.NotEmpty(t, healthPayload.Metadata.RequestID)
+
+	readyRequest := httptest.NewRequest(stdhttp.MethodGet, "/readyz", nil)
+	readyResponse := httptest.NewRecorder()
+	router.ServeHTTP(readyResponse, readyRequest)
+	require.Equal(t, stdhttp.StatusOK, readyResponse.Code)
+
+	var readyPayload WrapperDtoResponde[ReadinessResponseDto]
+	require.NoError(t, json.Unmarshal(readyResponse.Body.Bytes(), &readyPayload))
+	assert.Equal(t, "ok", readyPayload.Data.Status)
+	require.Len(t, readyPayload.Data.Checks, 2)
+	assert.Equal(t, "database", readyPayload.Data.Checks[0].Name)
+	assert.Equal(t, "redis", readyPayload.Data.Checks[1].Name)
+	assert.NotEmpty(t, readyPayload.Metadata.RequestID)
+}
+
+func TestRouterAcceptsTelemetry(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/telemetry", bytes.NewBufferString(`{
+		"events": [
+			{"name": "page.view"},
+			{"name": "analysis.opened"}
+		]
+	}`))
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusAccepted, response.Code)
+	var payload WrapperDtoResponde[TelemetryAcceptedResponseDto]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.True(t, payload.Data.Accepted)
+	assert.Equal(t, 2, payload.Data.EventCount)
+}
+
+func TestRecoverMiddlewareUsesConfiguredProviderSummary(t *testing.T) {
+	t.Parallel()
+
+	provider := ProviderSummary{
+		Mode:          "prod",
+		LLM:           "ollama-prod",
+		Observability: []string{"prometheus-prod"},
+	}
+	handler := recoverMiddleware(slog.New(slog.NewTextHandler(io.Discard, nil)), func() ProviderSummary {
+		return provider
+	})(stdhttp.HandlerFunc(func(stdhttp.ResponseWriter, *stdhttp.Request) {
+		panic("boom")
+	}))
+	request := httptest.NewRequest(stdhttp.MethodGet, "/panic", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusInternalServerError, response.Code)
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "internal_error", payload.Data.Code)
+	assert.Equal(t, provider.Mode, payload.Metadata.Provider.Mode)
+	assert.Equal(t, provider.LLM, payload.Metadata.Provider.LLM)
+	assert.Equal(t, provider.Observability, payload.Metadata.Provider.Observability)
+}
+
+func TestRateLimitMiddlewareUsesConfiguredProviderSummary(t *testing.T) {
+	t.Parallel()
+
+	provider := ProviderSummary{
+		Mode:          "prod",
+		LLM:           "openai-prod",
+		Observability: []string{"loki-prod"},
+	}
+	limiter := newRateLimiter(RateLimitConfig{RequestsPerSecond: 0.01, Burst: 1})
+	handler := rateLimitMiddleware(limiter, func() ProviderSummary {
+		return provider
+	})(stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		writer.WriteHeader(stdhttp.StatusNoContent)
+	}))
+	first := httptest.NewRequest(stdhttp.MethodGet, "/limited", nil)
+	first.RemoteAddr = "203.0.113.10:1000"
+	firstResponse := httptest.NewRecorder()
+	second := httptest.NewRequest(stdhttp.MethodGet, "/limited", nil)
+	second.RemoteAddr = "203.0.113.10:1001"
+	secondResponse := httptest.NewRecorder()
+
+	handler.ServeHTTP(firstResponse, first)
+	handler.ServeHTTP(secondResponse, second)
+
+	require.Equal(t, stdhttp.StatusNoContent, firstResponse.Code)
+	require.Equal(t, stdhttp.StatusTooManyRequests, secondResponse.Code)
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(secondResponse.Body.Bytes(), &payload))
+	assert.Equal(t, "rate_limited", payload.Data.Code)
+	assert.Equal(t, provider.Mode, payload.Metadata.Provider.Mode)
+	assert.Equal(t, provider.LLM, payload.Metadata.Provider.LLM)
+	assert.Equal(t, provider.Observability, payload.Metadata.Provider.Observability)
 }
 
 func newTestRouter() stdhttp.Handler {

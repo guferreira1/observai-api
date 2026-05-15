@@ -12,9 +12,22 @@ import (
 
 // AnalysisRetention is the use case for deleting analyses individually or
 // in bulk by age.
+//
+// The retention policy is hard-delete: the repository removes the
+// analysis row immediately and the foreign keys on
+// `analysis_chat_messages`, `chat_feedback`, `analysis_jobs` and webhook
+// deliveries cascade so a single Delete/Purge invocation cleans up the
+// entire object graph without leaving orphaned rows.
 type AnalysisRetention struct {
 	repository ports.AnalysisRetention
 	now        func() time.Time
+}
+
+// RetentionPreview describes how many analyses a retention action would delete.
+type RetentionPreview struct {
+	WouldDelete int
+	Cutoff      time.Time
+	KeepNewest  int
 }
 
 // NewAnalysisRetention creates a retention use case.
@@ -50,4 +63,44 @@ func (useCase *AnalysisRetention) Purge(ctx context.Context, age time.Duration) 
 		return 0, fmt.Errorf("purge analyses: %w", err)
 	}
 	return affected, nil
+}
+
+// PreviewPurge returns the number of analyses older than now-age without deleting them.
+func (useCase *AnalysisRetention) PreviewPurge(ctx context.Context, age time.Duration) (RetentionPreview, error) {
+	if age <= 0 {
+		return RetentionPreview{}, fmt.Errorf("retention age must be positive")
+	}
+	cutoff := useCase.now().UTC().Add(-age)
+	count, err := useCase.repository.CountOlderThan(ctx, cutoff)
+	if err != nil {
+		return RetentionPreview{}, fmt.Errorf("preview purge analyses: %w", err)
+	}
+	return RetentionPreview{WouldDelete: count, Cutoff: cutoff}, nil
+}
+
+// PurgeByQuantity preserves the supplied number of newest analyses and
+// removes the rest. The keep argument must be positive; the repository
+// implements the truncation using `OFFSET keep` so the deletion is a
+// single round-trip.
+func (useCase *AnalysisRetention) PurgeByQuantity(ctx context.Context, keep int) (int, error) {
+	if keep <= 0 {
+		return 0, fmt.Errorf("retention quantity must be positive")
+	}
+	affected, err := useCase.repository.DeleteKeepingNewest(ctx, keep)
+	if err != nil {
+		return 0, fmt.Errorf("purge analyses keeping newest: %w", err)
+	}
+	return affected, nil
+}
+
+// PreviewPurgeByQuantity returns how many analyses exceed the newest keep count.
+func (useCase *AnalysisRetention) PreviewPurgeByQuantity(ctx context.Context, keep int) (RetentionPreview, error) {
+	if keep <= 0 {
+		return RetentionPreview{}, fmt.Errorf("retention quantity must be positive")
+	}
+	count, err := useCase.repository.CountExceedingNewest(ctx, keep)
+	if err != nil {
+		return RetentionPreview{}, fmt.Errorf("preview purge analyses keeping newest: %w", err)
+	}
+	return RetentionPreview{WouldDelete: count, KeepNewest: keep}, nil
 }

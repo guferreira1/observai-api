@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	asynqadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/asynq"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/postgres"
 	redisadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/redis"
@@ -27,6 +28,11 @@ type analysisStore struct {
 	webhookDispatcher ports.WebhookDispatcher
 	auditLog          ports.AuditLogRepository
 	retention         ports.AnalysisRetention
+	users             ports.UserRepository
+	refreshTokens     ports.RefreshTokenRepository
+	providerConfigs   ports.ProviderConfigRepository
+	llmConfigs        ports.LLMConfigRepository
+	webhookDeliveries ports.WebhookDeliveryRepository
 	close             func()
 	postgres          *postgres.AnalysisRepository
 }
@@ -53,6 +59,8 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 	inMemoryRepository := inmemory.NewAnalysisRepository()
 	inMemoryJobs := inmemory.NewAnalysisJobRepository()
 	inMemoryFeedback := inmemory.NewChatFeedbackRepository()
+	inMemoryUsers := inmemory.NewUserRepository()
+	inMemoryRefresh := inmemory.NewRefreshTokenRepository()
 	databaseDSN := strings.TrimSpace(cfg.DatabaseDSN)
 	if databaseDSN == "" {
 		log.Warn("postgres repository disabled; using in-memory analysis repository")
@@ -61,6 +69,8 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 			chatHistory:   inMemoryRepository,
 			jobRepository: inMemoryJobs,
 			chatFeedback:  inMemoryFeedback,
+			users:         inMemoryUsers,
+			refreshTokens: inMemoryRefresh,
 			close:         func() {},
 		}
 	}
@@ -79,7 +89,12 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 	webhookRepository := postgres.NewWebhookRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 	auditLogRepository := postgres.NewAuditLogRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
 	retentionRepository := postgres.NewAnalysisRetentionRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
-	webhookDispatcher := webhooks.NewDispatcher(webhooks.DispatcherOptions{Logger: log, Observer: observer})
+	userRepository := postgres.NewUserRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	refreshTokenRepository := postgres.NewRefreshTokenRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	providerConfigRepository := postgres.NewProviderConfigRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	llmConfigRepository := postgres.NewLLMConfigRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	webhookDeliveryRepository := postgres.NewWebhookDeliveryRepository(postgresRepository.Pool(), postgres.RepositoryOptions{Observer: observer})
+	webhookDispatcher := webhooks.NewDispatcher(webhooks.DispatcherOptions{Logger: log, Observer: observer, Deliveries: webhookDeliveryRepository})
 
 	log.Info("postgres repository enabled")
 	return analysisStore{
@@ -92,6 +107,11 @@ func newAnalysisStore(cfg config.Config, log *slog.Logger, observer observabilit
 		webhookDispatcher: webhookDispatcher,
 		auditLog:          auditLogRepository,
 		retention:         retentionRepository,
+		users:             userRepository,
+		refreshTokens:     refreshTokenRepository,
+		providerConfigs:   providerConfigRepository,
+		llmConfigs:        llmConfigRepository,
+		webhookDeliveries: webhookDeliveryRepository,
 		close:             postgresRepository.Close,
 		postgres:          postgresRepository,
 	}
@@ -148,13 +168,6 @@ func newAnalysisQueue(cfg config.Config, log *slog.Logger, observer observabilit
 		os.Exit(1)
 	}
 
-	enqueuer := redisadapter.NewJobEnqueuer(client, redisadapter.EnqueuerOptions{Observer: observer})
-	worker := redisadapter.NewQueueWorker(client, redisadapter.WorkerOptions{
-		Concurrency:    cfg.Queue.Concurrency,
-		DequeueTimeout: cfg.Queue.DequeueTimeout,
-		Observer:       observer,
-	})
-
 	locker, err := redisadapter.NewAnalysisLocker(redisCtx, redisURL, redisadapter.LockerOptions{
 		TTL:      cfg.Queue.ChatLockTTL,
 		Wait:     cfg.Queue.ChatLockWait,
@@ -164,6 +177,52 @@ func newAnalysisQueue(cfg config.Config, log *slog.Logger, observer observabilit
 		log.Error("redis analysis locker initialization failed", "error", err)
 		os.Exit(1)
 	}
+
+	if strings.EqualFold(strings.TrimSpace(cfg.Queue.Backend), "asynq") {
+		asynqEnqueuer, err := asynqadapter.NewAnalysisEnqueuer(asynqadapter.EnqueuerOptions{
+			RedisURL: redisURL,
+			Observer: observer,
+		})
+		if err != nil {
+			log.Error("asynq enqueuer initialization failed", "error", err)
+			os.Exit(1)
+		}
+		asynqWorker, err := asynqadapter.NewAnalysisWorker(asynqadapter.WorkerOptions{
+			RedisURL:    redisURL,
+			Concurrency: cfg.Queue.Concurrency,
+			Logger:      log,
+		})
+		if err != nil {
+			log.Error("asynq worker initialization failed", "error", err)
+			os.Exit(1)
+		}
+		log.Info("asynq analysis queue enabled", "concurrency", cfg.Queue.Concurrency)
+		return analysisQueue{
+			enqueuer: asynqEnqueuer,
+			locker:   locker,
+			start:    asynqWorker.Start,
+			close: func() {
+				asynqWorker.Stop()
+				if err := asynqEnqueuer.Close(); err != nil {
+					log.Error("asynq enqueuer close failed", "error", err)
+				}
+				if err := locker.Close(); err != nil {
+					log.Error("redis analysis locker close failed", "error", err)
+				}
+				if err := client.Close(); err != nil {
+					log.Error("redis queue client close failed", "error", err)
+				}
+			},
+			redis: &redisLockerHandle{locker: locker},
+		}
+	}
+
+	enqueuer := redisadapter.NewJobEnqueuer(client, redisadapter.EnqueuerOptions{Observer: observer})
+	worker := redisadapter.NewQueueWorker(client, redisadapter.WorkerOptions{
+		Concurrency:    cfg.Queue.Concurrency,
+		DequeueTimeout: cfg.Queue.DequeueTimeout,
+		Observer:       observer,
+	})
 
 	log.Info("redis analysis queue enabled", "concurrency", cfg.Queue.Concurrency)
 	return analysisQueue{

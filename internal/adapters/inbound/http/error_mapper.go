@@ -106,6 +106,14 @@ var domainErrorRules = []domainErrorRule{
 		},
 	},
 	{
+		match: func(err error) bool { return errors.Is(err, domain.ErrProviderNotConfigured) },
+		response: httpErrorResponse{
+			status:  stdhttp.StatusServiceUnavailable,
+			code:    "provider_not_configured",
+			message: "the requested provider is not configured on this instance",
+		},
+	},
+	{
 		match: func(err error) bool { return errors.Is(err, errRequestBodyTooLarge) },
 		response: httpErrorResponse{
 			status:  stdhttp.StatusRequestEntityTooLarge,
