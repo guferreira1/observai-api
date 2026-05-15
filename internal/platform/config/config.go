@@ -186,6 +186,32 @@ type CookieConfig struct {
 	Secure bool   `yaml:"secure" env:"OBSERVAI_AUTH_COOKIE_SECURE"`
 }
 
+// RedactionConfig drives which redaction rules participate in the chain
+// applied to evidence before it reaches the LLM.
+//
+// Rules is a comma-separated list (e.g. "email,bearer,jwt,ipv4,credit_card,cpf").
+// An empty value enables every supported rule. Unknown rules are ignored.
+type RedactionConfig struct {
+	Rules string `yaml:"rules" env:"OBSERVAI_REDACTION_RULES"`
+}
+
+// SchedulerConfig configures the Asynq-backed scheduler that runs
+// retention purges and webhook retry sweeps on a cron tick.
+//
+// Enabled defaults to false so installations without Redis or background
+// workers keep the existing manual-purge / fire-and-forget webhook
+// semantics. RetentionDays caps how old an analysis can become before the
+// purge job sweeps it; zero disables age-based purge.
+type SchedulerConfig struct {
+	Enabled            bool          `yaml:"enabled" env:"OBSERVAI_SCHEDULER_ENABLED" env-default:"false"`
+	RetentionDays      int           `yaml:"retention_days" env:"OBSERVAI_RETENTION_DAYS" env-default:"90"`
+	RetentionQuantity  int           `yaml:"retention_quantity" env:"OBSERVAI_RETENTION_QUANTITY" env-default:"0"`
+	RetentionCron      string        `yaml:"retention_cron" env:"OBSERVAI_RETENTION_CRON" env-default:"0 3 * * *"`
+	WebhookRetryCron   string        `yaml:"webhook_retry_cron" env:"OBSERVAI_WEBHOOK_RETRY_CRON" env-default:"*/5 * * * *"`
+	WebhookSweepLookup time.Duration `yaml:"webhook_sweep_lookup" env:"OBSERVAI_WEBHOOK_SWEEP_LOOKUP" env-default:"5m"`
+	Concurrency        int           `yaml:"concurrency" env:"OBSERVAI_SCHEDULER_CONCURRENCY" env-default:"5"`
+}
+
 // QueueConfig configures the asynchronous analysis worker pool.
 //
 // Concurrency caps how many analyses may be running at once on this instance.
@@ -197,6 +223,7 @@ type QueueConfig struct {
 	DequeueTimeout time.Duration `yaml:"dequeue_timeout" env:"OBSERVAI_QUEUE_DEQUEUE_TIMEOUT" env-default:"5s"`
 	ChatLockTTL    time.Duration `yaml:"chat_lock_ttl" env:"OBSERVAI_CHAT_LOCK_TTL" env-default:"60s"`
 	ChatLockWait   time.Duration `yaml:"chat_lock_wait" env:"OBSERVAI_CHAT_LOCK_WAIT" env-default:"30s"`
+	Backend        string        `yaml:"backend" env:"OBSERVAI_QUEUE_BACKEND" env-default:"legacy"`
 }
 
 // Config contains application runtime configuration.
@@ -215,6 +242,8 @@ type Config struct {
 	HTTPAuth                HTTPAuthConfig      `yaml:"http_auth"`
 	JWT                     JWTConfig           `yaml:"jwt"`
 	Cookies                 CookieConfig        `yaml:"cookies"`
+	Scheduler               SchedulerConfig     `yaml:"scheduler"`
+	Redaction               RedactionConfig     `yaml:"redaction"`
 	MigrateOnStart          bool                `yaml:"migrate_on_start" env:"OBSERVAI_MIGRATE_ON_START" env-default:"false"`
 	MigrationsDir           string              `yaml:"migrations_dir" env:"OBSERVAI_MIGRATIONS_DIR" env-default:"migrations"`
 	Queue                   QueueConfig         `yaml:"queue"`

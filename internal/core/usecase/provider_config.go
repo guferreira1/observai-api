@@ -28,6 +28,11 @@ type ProviderConfigRequest struct {
 	IsActive    bool
 }
 
+// ReloadHook is invoked after a successful mutation so callers can rebuild
+// the live adapter set without restarting the API. Errors are logged by
+// the caller and never propagated.
+type ReloadHook func(ctx context.Context)
+
 // ProviderConfig orchestrates CRUD and test-connection flows for
 // observability provider configurations.
 type ProviderConfig struct {
@@ -35,12 +40,26 @@ type ProviderConfig struct {
 	cipher     ports.Cipher
 	tester     ports.ProviderTester
 	ids        ports.IDGenerator
+	reload     ReloadHook
 	now        func() time.Time
 }
 
 // NewProviderConfig creates a ProviderConfig use case.
 func NewProviderConfig(repository ports.ProviderConfigRepository, cipher ports.Cipher, tester ports.ProviderTester, ids ports.IDGenerator) *ProviderConfig {
 	return &ProviderConfig{repository: repository, cipher: cipher, tester: tester, ids: ids, now: time.Now}
+}
+
+// WithReloadHook installs a hook that fires after mutations so the
+// composition root can rebuild the live adapter set.
+func (useCase *ProviderConfig) WithReloadHook(hook ReloadHook) *ProviderConfig {
+	useCase.reload = hook
+	return useCase
+}
+
+func (useCase *ProviderConfig) fireReload(ctx context.Context) {
+	if useCase.reload != nil {
+		useCase.reload(ctx)
+	}
 }
 
 // Create persists a new provider configuration.
@@ -73,6 +92,7 @@ func (useCase *ProviderConfig) Create(ctx context.Context, request ProviderConfi
 	if err := useCase.repository.Create(ctx, config); err != nil {
 		return domain.ProviderConfig{}, err
 	}
+	useCase.fireReload(ctx)
 	return config, nil
 }
 
@@ -125,6 +145,7 @@ func (useCase *ProviderConfig) Update(ctx context.Context, id string, request Pr
 	if err := useCase.repository.Update(ctx, current); err != nil {
 		return domain.ProviderConfig{}, err
 	}
+	useCase.fireReload(ctx)
 	return current, nil
 }
 
@@ -144,7 +165,11 @@ func (useCase *ProviderConfig) Delete(ctx context.Context, id string) error {
 	if cleaned == "" {
 		return domain.ErrProviderConfigNotFound
 	}
-	return useCase.repository.Delete(ctx, cleaned)
+	if err := useCase.repository.Delete(ctx, cleaned); err != nil {
+		return err
+	}
+	useCase.fireReload(ctx)
+	return nil
 }
 
 // Test runs a liveness probe against the supplied configuration using the
@@ -188,7 +213,12 @@ func (useCase *ProviderConfig) setActive(ctx context.Context, id string, active 
 	if err := useCase.repository.SetActive(ctx, cleaned, active, now); err != nil {
 		return domain.ProviderConfig{}, err
 	}
-	return useCase.repository.Find(ctx, cleaned)
+	config, err := useCase.repository.Find(ctx, cleaned)
+	if err != nil {
+		return domain.ProviderConfig{}, err
+	}
+	useCase.fireReload(ctx)
+	return config, nil
 }
 
 func (useCase *ProviderConfig) validateRequest(request ProviderConfigRequest) error {

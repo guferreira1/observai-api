@@ -36,3 +36,33 @@ func TestOpenAPIDocumentEmbeddedAtCompileTime(t *testing.T) {
 	require.NotEmpty(t, document, "embedded OpenAPI document must not be empty")
 	assert.Contains(t, string(document), "question_out_of_scope")
 }
+
+func TestOpenAPIDocumentCoversNewAdminAndAuthSurface(t *testing.T) {
+	t.Parallel()
+
+	spec := string(OpenAPIDocument())
+	for _, path := range []string{
+		"/v1/setup/status",
+		"/v1/setup/admin",
+		"/v1/auth/login",
+		"/v1/auth/logout",
+		"/v1/auth/refresh",
+		"/v1/me",
+		"/v1/me/password",
+		"/v1/admin/users",
+		"/v1/admin/keys",
+		"/v1/admin/providers",
+		"/v1/admin/providers/{providerID}/test",
+		"/v1/admin/llm-providers",
+		"/v1/admin/llm-providers/{llmID}/activate",
+		"/v1/admin/webhooks/{webhookID}/test",
+		"/v1/admin/webhook-deliveries",
+		"/v1/admin/webhook-deliveries/{deliveryID}/retry",
+		"/v1/admin/audit",
+		"/v1/admin/analyses",
+	} {
+		assert.Contains(t, spec, path, "OpenAPI spec must document %s", path)
+	}
+	assert.Contains(t, spec, "version: 1.0.0", "version must be bumped to 1.0.0")
+	assert.Contains(t, spec, "text/event-stream", "chat SSE must be documented")
+}

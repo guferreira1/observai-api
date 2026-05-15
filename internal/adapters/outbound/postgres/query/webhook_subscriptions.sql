@@ -2,6 +2,11 @@
 INSERT INTO webhook_subscriptions (id, name, url, secret, event, created_at)
 VALUES (sqlc.arg(id), sqlc.arg(name), sqlc.arg(url), sqlc.arg(secret), sqlc.arg(event), sqlc.arg(created_at));
 
+-- name: FindWebhookSubscription :one
+SELECT id, name, url, secret, event, created_at, disabled_at
+FROM webhook_subscriptions
+WHERE id = sqlc.arg(id);
+
 -- name: ListWebhookSubscriptions :many
 SELECT id, name, url, secret, event, created_at, disabled_at
 FROM webhook_subscriptions

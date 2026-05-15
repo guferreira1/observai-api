@@ -72,16 +72,20 @@ type ApiKey struct {
 }
 
 type AuditLog struct {
-	ID         int64              `json:"id"`
-	RequestID  string             `json:"request_id"`
-	ApiKeyID   string             `json:"api_key_id"`
-	Actor      string             `json:"actor"`
-	Method     string             `json:"method"`
-	Path       string             `json:"path"`
-	Status     int32              `json:"status"`
-	DurationMs int64              `json:"duration_ms"`
-	Remote     string             `json:"remote"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ID           int64              `json:"id"`
+	RequestID    string             `json:"request_id"`
+	ApiKeyID     string             `json:"api_key_id"`
+	Actor        string             `json:"actor"`
+	Method       string             `json:"method"`
+	Path         string             `json:"path"`
+	Status       int32              `json:"status"`
+	DurationMs   int64              `json:"duration_ms"`
+	Remote       string             `json:"remote"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Action       string             `json:"action"`
+	ResourceType string             `json:"resource_type"`
+	ResourceID   string             `json:"resource_id"`
+	Metadata     []byte             `json:"metadata"`
 }
 
 type LlmConfiguration struct {
@@ -132,6 +136,21 @@ type User struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+}
+
+type WebhookDelivery struct {
+	ID             string             `json:"id"`
+	SubscriptionID string             `json:"subscription_id"`
+	Event          string             `json:"event"`
+	Payload        []byte             `json:"payload"`
+	Status         string             `json:"status"`
+	Attempt        int32              `json:"attempt"`
+	LastError      pgtype.Text        `json:"last_error"`
+	ResponseStatus pgtype.Int4        `json:"response_status"`
+	NextAttemptAt  pgtype.Timestamptz `json:"next_attempt_at"`
+	DeliveredAt    pgtype.Timestamptz `json:"delivered_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WebhookSubscription struct {

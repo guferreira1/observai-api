@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteAnalysesKeepingNewest = `-- name: DeleteAnalysesKeepingNewest :execrows
+DELETE FROM analyses
+WHERE id IN (
+    SELECT id FROM analyses
+    ORDER BY created_at DESC
+    OFFSET $1
+)
+`
+
+func (q *Queries) DeleteAnalysesKeepingNewest(ctx context.Context, keepCount int32) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAnalysesKeepingNewest, keepCount)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteAnalysesOlderThan = `-- name: DeleteAnalysesOlderThan :execrows
 DELETE FROM analyses WHERE created_at < $1
 `

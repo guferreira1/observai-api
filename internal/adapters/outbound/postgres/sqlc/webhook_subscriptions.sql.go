@@ -53,6 +53,27 @@ func (q *Queries) DisableWebhookSubscription(ctx context.Context, arg DisableWeb
 	return err
 }
 
+const findWebhookSubscription = `-- name: FindWebhookSubscription :one
+SELECT id, name, url, secret, event, created_at, disabled_at
+FROM webhook_subscriptions
+WHERE id = $1
+`
+
+func (q *Queries) FindWebhookSubscription(ctx context.Context, id string) (WebhookSubscription, error) {
+	row := q.db.QueryRow(ctx, findWebhookSubscription, id)
+	var i WebhookSubscription
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Url,
+		&i.Secret,
+		&i.Event,
+		&i.CreatedAt,
+		&i.DisabledAt,
+	)
+	return i, err
+}
+
 const listActiveWebhooksForEvent = `-- name: ListActiveWebhooksForEvent :many
 SELECT id, name, url, secret, event, created_at, disabled_at
 FROM webhook_subscriptions

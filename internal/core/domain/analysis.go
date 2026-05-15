@@ -159,19 +159,21 @@ type AnalysisRequest struct {
 // to cite evidence in chat answers and to link root-cause hypotheses to
 // supporting observations.
 type Evidence struct {
-	ID         string
-	Signal     SignalType
-	Service    string
-	Source     string
-	Name       string
-	Summary    string
-	Observed   time.Time
-	Score      float64
-	Unit       string
-	Reference  string
-	Provider   string
-	Query      string
-	Attributes map[string]string
+	ID             string
+	Signal         SignalType
+	Service        string
+	Source         string
+	Name           string
+	Summary        string
+	Observed       time.Time
+	Score          float64
+	Confidence     float64
+	Unit           string
+	Reference      string
+	Provider       string
+	Query          string
+	Attributes     map[string]string
+	RedactedFields []string
 }
 
 // RootCauseHypothesis describes a possible cause and the evidence that supports it.

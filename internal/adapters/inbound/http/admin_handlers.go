@@ -69,16 +69,20 @@ type WebhookResponseDto struct {
 
 // AuditEntryDto describes a single audit_log row.
 type AuditEntryDto struct {
-	ID         int64  `json:"id"`
-	RequestID  string `json:"requestId"`
-	APIKeyID   string `json:"apiKeyId"`
-	Actor      string `json:"actor"`
-	Method     string `json:"method"`
-	Path       string `json:"path"`
-	Status     int    `json:"status"`
-	DurationMs int64  `json:"durationMs"`
-	Remote     string `json:"remote"`
-	CreatedAt  string `json:"createdAt"`
+	ID           int64             `json:"id"`
+	RequestID    string            `json:"requestId"`
+	APIKeyID     string            `json:"apiKeyId"`
+	Actor        string            `json:"actor"`
+	Method       string            `json:"method"`
+	Path         string            `json:"path"`
+	Status       int               `json:"status"`
+	DurationMs   int64             `json:"durationMs"`
+	Remote       string            `json:"remote"`
+	Action       string            `json:"action,omitempty"`
+	ResourceType string            `json:"resourceType,omitempty"`
+	ResourceID   string            `json:"resourceId,omitempty"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
+	CreatedAt    string            `json:"createdAt"`
 }
 
 // AuditListResponseDto is the response payload for GET /v1/admin/audit.
@@ -108,6 +112,15 @@ func (router *Router) handleIssueAPIKey(writer stdhttp.ResponseWriter, request *
 		return
 	}
 
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "api_key.created",
+		ResourceType: "api_key",
+		ResourceID:   issued.APIKey.ID,
+		Metadata: map[string]string{
+			"name":   issued.APIKey.Name,
+			"scopes": strings.Join(scopesToStrings(issued.APIKey.Scopes), ","),
+		},
+	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, IssuedAPIKeyResponseDto{
 		ID:          issued.APIKey.ID,
 		Name:        issued.APIKey.Name,
@@ -146,6 +159,7 @@ func (router *Router) handleRevokeAPIKey(writer stdhttp.ResponseWriter, request 
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "api_key.revoked", ResourceType: "api_key", ResourceID: keyID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
 }
 
@@ -165,6 +179,12 @@ func (router *Router) handleCreateWebhook(writer stdhttp.ResponseWriter, request
 		return
 	}
 
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "webhook.created",
+		ResourceType: "webhook",
+		ResourceID:   webhook.ID,
+		Metadata:     map[string]string{"event": webhook.Event, "url": webhook.URL},
+	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, WebhookResponseDto{
 		ID:        webhook.ID,
 		Name:      webhook.Name,
@@ -204,10 +224,12 @@ func (router *Router) handleDeleteWebhook(writer stdhttp.ResponseWriter, request
 	startedAt := time.Now()
 	requestID := router.requestID(request)
 
-	if err := router.webhooks.Disable(request.Context(), chi.URLParam(request, "webhookID")); err != nil {
+	webhookID := chi.URLParam(request, "webhookID")
+	if err := router.webhooks.Disable(request.Context(), webhookID); err != nil {
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "webhook.deleted", ResourceType: "webhook", ResourceID: webhookID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
 }
 
@@ -216,17 +238,22 @@ func (router *Router) handleListAudit(writer stdhttp.ResponseWriter, request *st
 	requestID := router.requestID(request)
 
 	limit, offset := paginationFromQuery(request)
+	query := request.URL.Query()
 	filter := domain.AuditFilter{
-		APIKeyID: request.URL.Query().Get("apiKeyId"),
-		Limit:    limit,
-		Offset:   offset,
+		APIKeyID:     strings.TrimSpace(query.Get("apiKeyId")),
+		Actor:        strings.TrimSpace(query.Get("actor")),
+		Action:       strings.TrimSpace(query.Get("action")),
+		ResourceType: strings.TrimSpace(query.Get("resourceType")),
+		ResourceID:   strings.TrimSpace(query.Get("resourceId")),
+		Limit:        limit,
+		Offset:       offset,
 	}
-	if value := strings.TrimSpace(request.URL.Query().Get("from")); value != "" {
+	if value := strings.TrimSpace(query.Get("from")); value != "" {
 		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
 			filter.From = parsed
 		}
 	}
-	if value := strings.TrimSpace(request.URL.Query().Get("to")); value != "" {
+	if value := strings.TrimSpace(query.Get("to")); value != "" {
 		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
 			filter.To = parsed
 		}
@@ -241,16 +268,20 @@ func (router *Router) handleListAudit(writer stdhttp.ResponseWriter, request *st
 	items := make([]AuditEntryDto, 0, len(entries))
 	for _, entry := range entries {
 		items = append(items, AuditEntryDto{
-			ID:         entry.ID,
-			RequestID:  entry.RequestID,
-			APIKeyID:   entry.APIKeyID,
-			Actor:      entry.Actor,
-			Method:     entry.Method,
-			Path:       entry.Path,
-			Status:     entry.Status,
-			DurationMs: entry.DurationMs,
-			Remote:     entry.Remote,
-			CreatedAt:  entry.CreatedAt.Format(time.RFC3339),
+			ID:           entry.ID,
+			RequestID:    entry.RequestID,
+			APIKeyID:     entry.APIKeyID,
+			Actor:        entry.Actor,
+			Method:       entry.Method,
+			Path:         entry.Path,
+			Status:       entry.Status,
+			DurationMs:   entry.DurationMs,
+			Remote:       entry.Remote,
+			Action:       entry.Action,
+			ResourceType: entry.ResourceType,
+			ResourceID:   entry.ResourceID,
+			Metadata:     entry.Metadata,
+			CreatedAt:    entry.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, AuditListResponseDto{Items: items})
@@ -260,10 +291,12 @@ func (router *Router) handleDeleteAnalysis(writer stdhttp.ResponseWriter, reques
 	startedAt := time.Now()
 	requestID := router.requestID(request)
 
-	if err := router.retention.Delete(request.Context(), chi.URLParam(request, "analysisID")); err != nil {
+	analysisID := chi.URLParam(request, "analysisID")
+	if err := router.retention.Delete(request.Context(), analysisID); err != nil {
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "analysis.deleted", ResourceType: "analysis", ResourceID: analysisID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
 }
 
@@ -292,6 +325,11 @@ func (router *Router) handlePurgeAnalyses(writer stdhttp.ResponseWriter, request
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "analysis.purged",
+		ResourceType: "analysis",
+		Metadata:     map[string]string{"olderThan": age.String(), "deleted": strconv.Itoa(deleted)},
+	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, PurgeAnalysesResponseDto{Deleted: deleted})
 }
 

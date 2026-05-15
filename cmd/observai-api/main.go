@@ -50,6 +50,7 @@ func main() {
 
 	metrics := telemetry.NewHTTPMetrics()
 	providerMetrics := telemetry.NewProviderMetrics(metrics.Registry())
+	_ = telemetry.NewQueueCacheMetrics(metrics.Registry())
 	metricsHandler := promhttp.HandlerFor(metrics.Registry(), promhttp.HandlerOpts{})
 
 	tracerCtx, tracerCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -87,25 +88,27 @@ func main() {
 		log.Error("provider initialization failed", "error", err)
 		os.Exit(1)
 	}
+	registries := newAdapterRegistries(providers)
 
 	analysisUseCase := usecase.NewAnalysis(
-		providers.collector,
-		providers.generator,
+		registries.collector,
+		registries.generator,
 		store.repository,
 		cache.contexts,
 		cfg.AnalysisContextCacheTTL,
 		ids,
-	).WithAsyncBackend(store.jobRepository, queue.enqueuer)
+	).WithAsyncBackend(store.jobRepository, queue.enqueuer).
+		WithRedaction(buildRedactionChain(cfg))
 
 	chatUseCase := usecase.NewChat(
 		store.repository,
 		cache.contexts,
 		cfg.AnalysisContextCacheTTL,
 		store.chatHistory,
-		providers.responder,
+		registries.responder,
 	).WithLocker(queue.locker).WithFeedbackRepository(store.chatFeedback)
 
-	traceUseCase := usecase.NewTrace(store.repository, providers.traces)
+	traceUseCase := usecase.NewTrace(store.repository, registries.traces)
 
 	var apiKeyUseCase *usecase.APIKey
 	if store.apiKeys != nil {
@@ -138,7 +141,7 @@ func main() {
 
 	var webhookUseCase *usecase.WebhookSubscriptions
 	if store.webhooks != nil {
-		webhookUseCase = usecase.NewWebhookSubscriptions(store.webhooks, store.webhookDispatcher, ids)
+		webhookUseCase = usecase.NewWebhookSubscriptions(store.webhooks, store.webhookDeliveries, store.webhookDispatcher, ids)
 	}
 
 	var auditLogUseCase *usecase.AuditLog
@@ -168,6 +171,12 @@ func main() {
 		tester := providertest.New()
 		providerConfigUseCase = usecase.NewProviderConfig(store.providerConfigs, cipher, tester, ids)
 		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, ids)
+
+		reloadDeps := factoryDependencies(cfg, log, providerMetrics, credentialStore)
+		reload := newAdapterReloader(cfg, log, reloadDeps, registries, providerConfigUseCase, llmConfigUseCase)
+		providerConfigUseCase.WithReloadHook(reload)
+		llmConfigUseCase.WithReloadHook(reload)
+		reload(context.Background())
 	}
 
 	var setupUseCase *usecase.Setup
@@ -179,7 +188,20 @@ func main() {
 		}
 	}
 
-	checker := health.NewChecker(2*time.Second, buildHealthProbes(store, cache, providers)...)
+	scheduler, schedulerErr := newSchedulerIfEnabled(cfg, log, retentionUseCase, webhookUseCase)
+	if schedulerErr != nil {
+		log.Error("scheduler initialization failed", "error", schedulerErr)
+		os.Exit(1)
+	}
+	if scheduler != nil {
+		if err := scheduler.Start(); err != nil {
+			log.Error("scheduler start failed", "error", err)
+			os.Exit(1)
+		}
+		defer scheduler.Stop()
+	}
+
+	checker := health.NewChecker(2*time.Second, buildHealthProbes(store, cache, providers, providerConfigUseCase, llmConfigUseCase)...)
 
 	capabilities := buildCapabilities(cfg, providers, version)
 

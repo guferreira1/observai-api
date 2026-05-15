@@ -112,12 +112,23 @@ func (router *Router) handleLogin(writer stdhttp.ResponseWriter, request *stdhtt
 	session, err := router.sessions.Login(request.Context(), dto.Email, dto.Password)
 	if err != nil {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
+			AnnotateAudit(request, AuditAnnotation{
+				Action:       "auth.login_failed",
+				ResourceType: "user",
+				Metadata:     map[string]string{"email": strings.ToLower(strings.TrimSpace(dto.Email))},
+			})
 			router.writeError(writer, requestID, startedAt, stdhttp.StatusUnauthorized, "invalid_credentials", "email or password is invalid")
 			return
 		}
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "auth.login",
+		ResourceType: "user",
+		ResourceID:   session.User.ID,
+		Metadata:     map[string]string{"email": session.User.Email},
+	})
 
 	csrf, err := generateCSRFToken()
 	if err != nil {
@@ -141,6 +152,7 @@ func (router *Router) handleLogout(writer stdhttp.ResponseWriter, request *stdht
 		_ = router.sessions.Logout(request.Context(), cookie.Value)
 	}
 	router.clearSessionCookies(writer)
+	AnnotateAudit(request, AuditAnnotation{Action: "auth.logout", ResourceType: "user"})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
 }
 
@@ -288,6 +300,12 @@ func (router *Router) handleCreateUser(writer stdhttp.ResponseWriter, request *s
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "user.created",
+		ResourceType: "user",
+		ResourceID:   user.ID,
+		Metadata:     map[string]string{"email": user.Email, "role": string(user.Role)},
+	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, toUserResponseDto(user))
 }
 
@@ -323,6 +341,12 @@ func (router *Router) handleUpdateUser(writer stdhttp.ResponseWriter, request *s
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "user.updated",
+		ResourceType: "user",
+		ResourceID:   updated.ID,
+		Metadata:     map[string]string{"role": string(updated.Role), "isActive": formatBool(updated.IsActive)},
+	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toUserResponseDto(updated))
 }
 
@@ -350,10 +374,12 @@ func (router *Router) handleDeleteUser(writer stdhttp.ResponseWriter, request *s
 	startedAt := time.Now()
 	requestID := router.requestID(request)
 
-	if err := router.users.Delete(request.Context(), chi.URLParam(request, "userID")); err != nil {
+	userID := chi.URLParam(request, "userID")
+	if err := router.users.Delete(request.Context(), userID); err != nil {
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "user.deleted", ResourceType: "user", ResourceID: userID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
 }
 

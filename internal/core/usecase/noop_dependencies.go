@@ -33,3 +33,7 @@ func (noOpChatHistoryRepository) SaveExchange(context.Context, domain.ChatMessag
 func (noOpChatHistoryRepository) List(context.Context, string, domain.ChatHistoryFilter) ([]domain.ChatMessage, error) {
 	return []domain.ChatMessage{}, nil
 }
+
+func (noOpChatHistoryRepository) FindMessage(context.Context, string) (domain.ChatMessage, error) {
+	return domain.ChatMessage{}, domain.ErrChatMessageNotFound
+}

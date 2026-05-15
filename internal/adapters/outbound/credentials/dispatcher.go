@@ -33,16 +33,28 @@ type Dispatcher struct {
 	resolvers map[string]Resolver
 }
 
-// NewDispatcher creates a dispatcher with the default env and file resolvers
-// pre-registered. Additional schemes can be added through Register before
-// any resolution happens.
+// NewDispatcher creates a dispatcher with the default env, file and literal
+// resolvers pre-registered. Additional schemes can be added through
+// Register before any resolution happens.
 func NewDispatcher() *Dispatcher {
 	return &Dispatcher{
 		resolvers: map[string]Resolver{
-			"env":  EnvResolver{},
-			"file": NewFileResolver(),
+			"env":     EnvResolver{},
+			"file":    NewFileResolver(),
+			"literal": LiteralResolver{},
 		},
 	}
+}
+
+// LiteralResolver returns the supplied value verbatim. It is the safe
+// channel for in-memory plaintext credentials that may contain colons
+// (e.g. Dynatrace API tokens) and therefore cannot ride the bare-value
+// shortcut.
+type LiteralResolver struct{}
+
+// Resolve implements Resolver.
+func (LiteralResolver) Resolve(_ context.Context, value string) (string, error) {
+	return value, nil
 }
 
 // Register associates a resolver with a scheme. Subsequent registrations of

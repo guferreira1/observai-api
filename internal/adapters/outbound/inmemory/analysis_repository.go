@@ -156,6 +156,22 @@ func (repository *AnalysisRepository) SaveExchange(_ context.Context, question d
 	return nil
 }
 
+// FindMessage returns the chat message matching the supplied id across
+// every persisted analysis. The id is the stringified row counter
+// assigned by SaveExchange.
+func (repository *AnalysisRepository) FindMessage(_ context.Context, id string) (domain.ChatMessage, error) {
+	repository.mu.RLock()
+	defer repository.mu.RUnlock()
+	for _, list := range repository.messages {
+		for _, message := range list {
+			if message.ID == id {
+				return message, nil
+			}
+		}
+	}
+	return domain.ChatMessage{}, domain.ErrChatMessageNotFound
+}
+
 // List returns persisted chat messages for an analysis honoring the supplied filter.
 func (repository *AnalysisRepository) List(_ context.Context, analysisID string, filter domain.ChatHistoryFilter) ([]domain.ChatMessage, error) {
 	repository.mu.RLock()

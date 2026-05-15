@@ -11,4 +11,5 @@ import (
 type AnalysisRetention interface {
 	DeleteByID(ctx context.Context, id string) (int, error)
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int, error)
+	DeleteKeepingNewest(ctx context.Context, keep int) (int, error)
 }

@@ -21,6 +21,10 @@ INSERT INTO audit_log (
     status,
     duration_ms,
     remote,
+    action,
+    resource_type,
+    resource_id,
+    metadata,
     created_at
 ) VALUES (
     $1,
@@ -31,20 +35,28 @@ INSERT INTO audit_log (
     $6,
     $7,
     $8,
-    $9
+    $9,
+    $10,
+    $11,
+    $12,
+    $13
 )
 `
 
 type AppendAuditEntryParams struct {
-	RequestID  string             `json:"request_id"`
-	ApiKeyID   string             `json:"api_key_id"`
-	Actor      string             `json:"actor"`
-	Method     string             `json:"method"`
-	Path       string             `json:"path"`
-	Status     int32              `json:"status"`
-	DurationMs int64              `json:"duration_ms"`
-	Remote     string             `json:"remote"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	RequestID    string             `json:"request_id"`
+	ApiKeyID     string             `json:"api_key_id"`
+	Actor        string             `json:"actor"`
+	Method       string             `json:"method"`
+	Path         string             `json:"path"`
+	Status       int32              `json:"status"`
+	DurationMs   int64              `json:"duration_ms"`
+	Remote       string             `json:"remote"`
+	Action       string             `json:"action"`
+	ResourceType string             `json:"resource_type"`
+	ResourceID   string             `json:"resource_id"`
+	Metadata     []byte             `json:"metadata"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 func (q *Queries) AppendAuditEntry(ctx context.Context, arg AppendAuditEntryParams) error {
@@ -57,32 +69,65 @@ func (q *Queries) AppendAuditEntry(ctx context.Context, arg AppendAuditEntryPara
 		arg.Status,
 		arg.DurationMs,
 		arg.Remote,
+		arg.Action,
+		arg.ResourceType,
+		arg.ResourceID,
+		arg.Metadata,
 		arg.CreatedAt,
 	)
 	return err
 }
 
 const listAuditEntries = `-- name: ListAuditEntries :many
-SELECT id, request_id, api_key_id, actor, method, path, status, duration_ms, remote, created_at
+SELECT id, request_id, api_key_id, actor, method, path, status, duration_ms, remote, action, resource_type, resource_id, metadata, created_at
 FROM audit_log
 WHERE ($1::text IS NULL OR api_key_id = $1::text)
-  AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
-  AND ($3::timestamptz IS NULL OR created_at <= $3::timestamptz)
+  AND ($2::text IS NULL OR actor = $2::text)
+  AND ($3::text IS NULL OR action = $3::text)
+  AND ($4::text IS NULL OR resource_type = $4::text)
+  AND ($5::text IS NULL OR resource_id = $5::text)
+  AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR created_at <= $7::timestamptz)
 ORDER BY created_at DESC, id DESC
-LIMIT $5 OFFSET $4
+LIMIT $9 OFFSET $8
 `
 
 type ListAuditEntriesParams struct {
 	ApiKeyID     pgtype.Text        `json:"api_key_id"`
+	Actor        pgtype.Text        `json:"actor"`
+	Action       pgtype.Text        `json:"action"`
+	ResourceType pgtype.Text        `json:"resource_type"`
+	ResourceID   pgtype.Text        `json:"resource_id"`
 	FromAt       pgtype.Timestamptz `json:"from_at"`
 	ToAt         pgtype.Timestamptz `json:"to_at"`
 	ResultOffset int32              `json:"result_offset"`
 	ResultLimit  int32              `json:"result_limit"`
 }
 
-func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditLog, error) {
+type ListAuditEntriesRow struct {
+	ID           int64              `json:"id"`
+	RequestID    string             `json:"request_id"`
+	ApiKeyID     string             `json:"api_key_id"`
+	Actor        string             `json:"actor"`
+	Method       string             `json:"method"`
+	Path         string             `json:"path"`
+	Status       int32              `json:"status"`
+	DurationMs   int64              `json:"duration_ms"`
+	Remote       string             `json:"remote"`
+	Action       string             `json:"action"`
+	ResourceType string             `json:"resource_type"`
+	ResourceID   string             `json:"resource_id"`
+	Metadata     []byte             `json:"metadata"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]ListAuditEntriesRow, error) {
 	rows, err := q.db.Query(ctx, listAuditEntries,
 		arg.ApiKeyID,
+		arg.Actor,
+		arg.Action,
+		arg.ResourceType,
+		arg.ResourceID,
 		arg.FromAt,
 		arg.ToAt,
 		arg.ResultOffset,
@@ -92,9 +137,9 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 		return nil, err
 	}
 	defer rows.Close()
-	items := []AuditLog{}
+	items := []ListAuditEntriesRow{}
 	for rows.Next() {
-		var i AuditLog
+		var i ListAuditEntriesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.RequestID,
@@ -105,6 +150,10 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.Status,
 			&i.DurationMs,
 			&i.Remote,
+			&i.Action,
+			&i.ResourceType,
+			&i.ResourceID,
+			&i.Metadata,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

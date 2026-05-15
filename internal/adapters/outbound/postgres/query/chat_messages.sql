@@ -14,6 +14,11 @@ INSERT INTO analysis_chat_messages (
 )
 RETURNING id, analysis_id, role, content, evidence, created_at;
 
+-- name: FindChatMessageByID :one
+SELECT id, analysis_id, role, content, evidence, created_at
+FROM analysis_chat_messages
+WHERE id = sqlc.arg(id);
+
 -- name: ListChatMessagesByAnalysis :many
 SELECT
     id,

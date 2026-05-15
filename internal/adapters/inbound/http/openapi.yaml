@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: ObservAI API
-  version: 0.1.0
+  version: 1.0.0
   description: |
     Provider-agnostic observability analysis gateway.
 
@@ -24,6 +24,14 @@ tags:
     description: Scoped conversation about an existing analysis.
   - name: operational
     description: Health, readiness and Prometheus metrics.
+  - name: auth
+    description: Browser-session authentication (JWT cookie + CSRF).
+  - name: setup
+    description: First-run installation flow.
+  - name: profile
+    description: Authenticated user profile management.
+  - name: admin
+    description: Administrative endpoints (admin role required).
 paths:
   /health:
     get:
@@ -536,6 +544,295 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /v1/setup/status:
+    get:
+      tags: [setup]
+      summary: Report the installation status (admin presence, providers, LLM).
+      operationId: getSetupStatus
+      responses:
+        "200": { description: Setup status snapshot. }
+
+  /v1/setup/admin:
+    post:
+      tags: [setup]
+      summary: Bootstrap the initial admin user. Rejected once any user exists.
+      operationId: bootstrapAdmin
+      responses:
+        "201": { description: Initial admin created. }
+        "409": { description: Setup already completed. }
+
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Authenticate with email + password. Issues session/refresh/CSRF cookies.
+      operationId: login
+      responses:
+        "200": { description: Session issued. }
+        "401": { description: Invalid credentials. }
+
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke the supplied refresh token and clear session cookies.
+      operationId: logout
+      responses:
+        "204": { description: Session cleared. }
+
+  /v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate the refresh cookie and issue a fresh access token.
+      operationId: refreshSession
+      responses:
+        "200": { description: New session issued. }
+        "401": { description: Refresh token invalid or expired. }
+
+  /v1/me:
+    get:
+      tags: [profile]
+      summary: Return the authenticated user profile.
+      operationId: getMe
+      responses:
+        "200": { description: User profile. }
+    patch:
+      tags: [profile]
+      summary: Update the authenticated user's email.
+      operationId: updateMe
+      responses:
+        "200": { description: Updated profile. }
+
+  /v1/me/password:
+    post:
+      tags: [profile]
+      summary: Change the authenticated user's password and revoke active sessions.
+      operationId: changePassword
+      responses:
+        "204": { description: Password updated; client must log in again. }
+        "401": { description: Current password is incorrect. }
+
+  /v1/admin/users:
+    get:
+      tags: [admin]
+      summary: List users (admin role required).
+      operationId: listUsers
+      responses:
+        "200": { description: User list. }
+    post:
+      tags: [admin]
+      summary: Create a user (admin role required).
+      operationId: createUser
+      responses:
+        "201": { description: User created. }
+  /v1/admin/users/{userID}:
+    get:
+      tags: [admin]
+      summary: Read a user (admin role required).
+      operationId: getUser
+      parameters:
+        - in: path
+          name: userID
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: User. }
+        "404": { description: User not found. }
+    patch:
+      tags: [admin]
+      summary: Update role / active flag (admin role required).
+      operationId: updateUser
+      parameters:
+        - in: path
+          name: userID
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: User. }
+    delete:
+      tags: [admin]
+      summary: Remove a user (admin role required).
+      operationId: deleteUser
+      parameters:
+        - in: path
+          name: userID
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: User removed. }
+
+  /v1/admin/keys:
+    get:
+      tags: [admin]
+      summary: List API keys (masked).
+      operationId: listAPIKeys
+      responses:
+        "200": { description: API key list. }
+    post:
+      tags: [admin]
+      summary: Issue an API key. Plaintext returned once.
+      operationId: issueAPIKey
+      responses:
+        "201": { description: API key issued. }
+  /v1/admin/keys/{keyID}:
+    delete:
+      tags: [admin]
+      summary: Revoke an API key.
+      operationId: revokeAPIKey
+      parameters:
+        - in: path
+          name: keyID
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: API key revoked. }
+
+  /v1/admin/providers:
+    get:
+      tags: [admin]
+      summary: List observability provider configurations.
+      operationId: listProviderConfigs
+      responses:
+        "200": { description: Provider list (credentials masked). }
+    post:
+      tags: [admin]
+      summary: Create a provider configuration. Credentials encrypted at rest.
+      operationId: createProviderConfig
+      responses:
+        "201": { description: Provider created. }
+  /v1/admin/providers/{providerID}:
+    get:
+      tags: [admin]
+      operationId: getProviderConfig
+      parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
+      responses: { "200": { description: Provider. } }
+    patch:
+      tags: [admin]
+      operationId: updateProviderConfig
+      parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
+      responses: { "200": { description: Updated. } }
+    delete:
+      tags: [admin]
+      operationId: deleteProviderConfig
+      parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
+      responses: { "204": { description: Removed. } }
+  /v1/admin/providers/{providerID}/test:
+    post:
+      tags: [admin]
+      summary: Run a liveness probe against the provider.
+      operationId: testProviderConfig
+      parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
+      responses: { "200": { description: Probe outcome. } }
+  /v1/admin/providers/{providerID}/activate:
+    post:
+      tags: [admin]
+      operationId: activateProviderConfig
+      parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
+      responses: { "200": { description: Activated. } }
+  /v1/admin/providers/{providerID}/deactivate:
+    post:
+      tags: [admin]
+      operationId: deactivateProviderConfig
+      parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
+      responses: { "200": { description: Deactivated. } }
+
+  /v1/admin/llm-providers:
+    get:
+      tags: [admin]
+      operationId: listLLMConfigs
+      responses: { "200": { description: LLM config list. } }
+    post:
+      tags: [admin]
+      operationId: createLLMConfig
+      responses: { "201": { description: LLM config created. } }
+  /v1/admin/llm-providers/{llmID}:
+    get:
+      tags: [admin]
+      operationId: getLLMConfig
+      parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
+      responses: { "200": { description: LLM config. } }
+    patch:
+      tags: [admin]
+      operationId: updateLLMConfig
+      parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
+      responses: { "200": { description: Updated. } }
+    delete:
+      tags: [admin]
+      operationId: deleteLLMConfig
+      parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
+      responses: { "204": { description: Removed. } }
+  /v1/admin/llm-providers/{llmID}/test:
+    post:
+      tags: [admin]
+      operationId: testLLMConfig
+      parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
+      responses: { "200": { description: Probe outcome. } }
+  /v1/admin/llm-providers/{llmID}/activate:
+    post:
+      tags: [admin]
+      operationId: activateLLMConfig
+      parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
+      responses: { "200": { description: Activated. } }
+
+  /v1/admin/webhooks:
+    get:
+      tags: [admin]
+      operationId: listWebhooks
+      responses: { "200": { description: Webhook list. } }
+    post:
+      tags: [admin]
+      operationId: createWebhook
+      responses: { "201": { description: Webhook created. } }
+  /v1/admin/webhooks/{webhookID}:
+    delete:
+      tags: [admin]
+      operationId: deleteWebhook
+      parameters: [{ in: path, name: webhookID, required: true, schema: { type: string } }]
+      responses: { "204": { description: Removed. } }
+  /v1/admin/webhooks/{webhookID}/test:
+    post:
+      tags: [admin]
+      summary: Dispatch a synthetic webhook.test event to verify the receiver.
+      operationId: testWebhook
+      parameters: [{ in: path, name: webhookID, required: true, schema: { type: string } }]
+      responses: { "202": { description: Test queued. } }
+
+  /v1/admin/webhook-deliveries:
+    get:
+      tags: [admin]
+      summary: List persisted webhook delivery attempts.
+      operationId: listWebhookDeliveries
+      responses: { "200": { description: Delivery list. } }
+  /v1/admin/webhook-deliveries/{deliveryID}/retry:
+    post:
+      tags: [admin]
+      summary: Re-dispatch a persisted delivery using the original payload.
+      operationId: retryWebhookDelivery
+      parameters: [{ in: path, name: deliveryID, required: true, schema: { type: string } }]
+      responses: { "202": { description: Retry queued. } }
+
+  /v1/admin/audit:
+    get:
+      tags: [admin]
+      summary: Search the audit log. Supports actor/action/resource/date filters.
+      operationId: listAudit
+      parameters:
+        - { in: query, name: apiKeyId, schema: { type: string } }
+        - { in: query, name: actor, schema: { type: string } }
+        - { in: query, name: action, schema: { type: string } }
+        - { in: query, name: resourceType, schema: { type: string } }
+        - { in: query, name: resourceId, schema: { type: string } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses: { "200": { description: Audit entries. } }
+
+  /v1/admin/analyses:
+    delete:
+      tags: [admin]
+      summary: Purge analyses older than the supplied duration.
+      operationId: purgeAnalyses
+      parameters:
+        - { in: query, name: olderThan, required: true, schema: { type: string } }
+      responses: { "200": { description: Purge outcome. } }
 components:
   parameters:
     AnalysisID:
@@ -1303,3 +1600,172 @@ components:
           $ref: "#/components/schemas/AnalysisJobStatusDto"
         metadata:
           $ref: "#/components/schemas/ResponseMetadata"
+
+    # ---- Auth + Profile ------------------------------------------------------
+
+    UserResponseDto:
+      type: object
+      required: [id, email, role, isActive, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [admin, operator, viewer] }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastLoginAt: { type: string, format: date-time, nullable: true }
+    SessionResponseDto:
+      type: object
+      required: [user, csrfToken, expiresAt]
+      properties:
+        user:
+          $ref: "#/components/schemas/UserResponseDto"
+        csrfToken: { type: string }
+        expiresAt: { type: string, format: date-time }
+    WrapperDtoResponde_UserResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/UserResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_SessionResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/SessionResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+
+    # ---- Setup ---------------------------------------------------------------
+
+    SetupStatusResponseDto:
+      type: object
+      required: [adminExists, llmConfigured, observabilityConfigured, setupCompleted, state]
+      properties:
+        adminExists: { type: boolean }
+        llmConfigured: { type: boolean }
+        observabilityConfigured: { type: boolean }
+        setupCompleted: { type: boolean }
+        state: { type: string, enum: [pending, completed, degraded] }
+    WrapperDtoResponde_SetupStatusResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/SetupStatusResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+
+    # ---- API keys ------------------------------------------------------------
+
+    APIKeyDto:
+      type: object
+      required: [id, name, scopes, masked, hasCredentials, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        scopes:
+          type: array
+          items:
+            type: string
+            enum: [analysis:read, analysis:write, chat:write, admin:read, admin:write]
+        masked: { type: string, description: "Masked preview, e.g. sk-****abcd" }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        lastUsedAt: { type: string, format: date-time, nullable: true }
+        revokedAt: { type: string, format: date-time, nullable: true }
+    IssuedAPIKeyResponseDto:
+      allOf:
+        - $ref: "#/components/schemas/APIKeyDto"
+        - type: object
+          required: [secret]
+          properties:
+            secret:
+              type: string
+              description: "Plaintext token. Shown ONLY at issue time; the server stores the SHA-256 hash."
+    WrapperDtoResponde_IssuedAPIKeyResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/IssuedAPIKeyResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+
+    # ---- Provider + LLM configs ---------------------------------------------
+
+    ProviderConfigResponseDto:
+      type: object
+      required: [id, type, name, url, timeoutMs, signals, hasCredentials, isActive, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum: [prometheus, loki, jaeger, elasticsearch, opensearch, otel, tempo, dynatrace, datadog, newrelic]
+        name: { type: string }
+        url: { type: string, format: uri }
+        timeoutMs: { type: integer, minimum: 0 }
+        signals: { type: array, items: { type: string } }
+        options:
+          type: object
+          additionalProperties: { type: string }
+        credentialsMasked: { type: string }
+        hasCredentials: { type: boolean }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    LLMConfigResponseDto:
+      type: object
+      required: [id, type, name, baseUrl, model, timeoutMs, hasApiKey, isActive, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum: [ollama, openai, anthropic, azure, openrouter]
+        name: { type: string }
+        baseUrl: { type: string, format: uri }
+        model: { type: string }
+        timeoutMs: { type: integer, minimum: 0 }
+        options:
+          type: object
+          additionalProperties: { type: string }
+        apiKeyMasked: { type: string }
+        hasApiKey: { type: boolean }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    TestConnectionResponseDto:
+      type: object
+      required: [reached, latencyMs]
+      properties:
+        reached: { type: boolean }
+        latencyMs: { type: integer, minimum: 0 }
+        error: { type: string }
+
+    # ---- Webhooks ------------------------------------------------------------
+
+    WebhookDeliveryDto:
+      type: object
+      required: [id, subscriptionId, event, status, attempt, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        subscriptionId: { type: string }
+        event: { type: string }
+        status: { type: string, enum: [pending, delivered, failed] }
+        attempt: { type: integer, minimum: 0 }
+        lastError: { type: string }
+        responseStatus: { type: integer }
+        nextAttemptAt: { type: string, format: date-time, nullable: true }
+        deliveredAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        payload:
+          description: "Original JSON payload sent to the receiver."
+          oneOf:
+            - type: object
+            - type: array
+            - type: string

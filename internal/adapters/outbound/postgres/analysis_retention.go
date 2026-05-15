@@ -54,3 +54,20 @@ func (repository *AnalysisRetentionRepository) DeleteOlderThan(ctx context.Conte
 	}
 	return int(affected), nil
 }
+
+// DeleteKeepingNewest preserves the supplied number of newest analyses and
+// removes everything else (FK cascade cleans chat history, feedback and
+// jobs). A non-positive keep leaves the table untouched.
+func (repository *AnalysisRetentionRepository) DeleteKeepingNewest(ctx context.Context, keep int) (rowsAffected int, err error) {
+	startedAt := time.Now()
+	defer func() { repository.observe("delete_analyses_keeping_newest", startedAt, err) }()
+
+	if keep <= 0 {
+		return 0, nil
+	}
+	affected, err := repository.queries.DeleteAnalysesKeepingNewest(ctx, int32(keep))
+	if err != nil {
+		return 0, fmt.Errorf("delete analyses keeping newest: %w", err)
+	}
+	return int(affected), nil
+}

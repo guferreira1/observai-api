@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	stdhttp "net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -170,6 +171,12 @@ func (router *Router) handleCreateProviderConfig(writer stdhttp.ResponseWriter, 
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "provider.created",
+		ResourceType: "provider",
+		ResourceID:   config.ID,
+		Metadata:     map[string]string{"type": string(config.Type), "name": config.Name},
+	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, toProviderConfigResponseDto(config))
 }
 
@@ -221,6 +228,7 @@ func (router *Router) handleUpdateProviderConfig(writer stdhttp.ResponseWriter, 
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "provider.updated", ResourceType: "provider", ResourceID: config.ID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toProviderConfigResponseDto(config))
 }
 
@@ -228,10 +236,12 @@ func (router *Router) handleDeleteProviderConfig(writer stdhttp.ResponseWriter, 
 	startedAt := time.Now()
 	requestID := router.requestID(request)
 
-	if err := router.providerConfigs.Delete(request.Context(), chi.URLParam(request, "providerID")); err != nil {
+	providerID := chi.URLParam(request, "providerID")
+	if err := router.providerConfigs.Delete(request.Context(), providerID); err != nil {
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "provider.deleted", ResourceType: "provider", ResourceID: providerID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
 }
 
@@ -244,6 +254,7 @@ func (router *Router) handleActivateProviderConfig(writer stdhttp.ResponseWriter
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "provider.activated", ResourceType: "provider", ResourceID: config.ID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toProviderConfigResponseDto(config))
 }
 
@@ -256,6 +267,7 @@ func (router *Router) handleDeactivateProviderConfig(writer stdhttp.ResponseWrit
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "provider.deactivated", ResourceType: "provider", ResourceID: config.ID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toProviderConfigResponseDto(config))
 }
 
@@ -263,11 +275,21 @@ func (router *Router) handleTestProviderConfig(writer stdhttp.ResponseWriter, re
 	startedAt := time.Now()
 	requestID := router.requestID(request)
 
-	result, err := router.providerConfigs.Test(request.Context(), chi.URLParam(request, "providerID"))
+	providerID := chi.URLParam(request, "providerID")
+	result, err := router.providerConfigs.Test(request.Context(), providerID)
 	if err != nil {
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "provider.tested",
+		ResourceType: "provider",
+		ResourceID:   providerID,
+		Metadata: map[string]string{
+			"reached":   formatBool(result.Reached),
+			"latencyMs": strconv.FormatInt(result.LatencyMs, 10),
+		},
+	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, TestConnectionResponseDto{
 		Reached:   result.Reached,
 		LatencyMs: result.LatencyMs,
@@ -294,6 +316,12 @@ func (router *Router) handleCreateLLMConfig(writer stdhttp.ResponseWriter, reque
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "llm.created",
+		ResourceType: "llm",
+		ResourceID:   config.ID,
+		Metadata:     map[string]string{"type": string(config.Type), "name": config.Name, "model": config.Model},
+	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, toLLMConfigResponseDto(config))
 }
 
@@ -345,6 +373,7 @@ func (router *Router) handleUpdateLLMConfig(writer stdhttp.ResponseWriter, reque
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "llm.updated", ResourceType: "llm", ResourceID: config.ID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toLLMConfigResponseDto(config))
 }
 
@@ -352,10 +381,12 @@ func (router *Router) handleDeleteLLMConfig(writer stdhttp.ResponseWriter, reque
 	startedAt := time.Now()
 	requestID := router.requestID(request)
 
-	if err := router.llmConfigs.Delete(request.Context(), chi.URLParam(request, "llmID")); err != nil {
+	llmID := chi.URLParam(request, "llmID")
+	if err := router.llmConfigs.Delete(request.Context(), llmID); err != nil {
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "llm.deleted", ResourceType: "llm", ResourceID: llmID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusNoContent, struct{}{})
 }
 
@@ -368,6 +399,7 @@ func (router *Router) handleActivateLLMConfig(writer stdhttp.ResponseWriter, req
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{Action: "llm.activated", ResourceType: "llm", ResourceID: config.ID})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toLLMConfigResponseDto(config))
 }
 
@@ -375,16 +407,33 @@ func (router *Router) handleTestLLMConfig(writer stdhttp.ResponseWriter, request
 	startedAt := time.Now()
 	requestID := router.requestID(request)
 
-	result, err := router.llmConfigs.Test(request.Context(), chi.URLParam(request, "llmID"))
+	llmID := chi.URLParam(request, "llmID")
+	result, err := router.llmConfigs.Test(request.Context(), llmID)
 	if err != nil {
 		router.writeProviderConfigError(writer, requestID, startedAt, err)
 		return
 	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "llm.tested",
+		ResourceType: "llm",
+		ResourceID:   llmID,
+		Metadata: map[string]string{
+			"reached":   formatBool(result.Reached),
+			"latencyMs": strconv.FormatInt(result.LatencyMs, 10),
+		},
+	})
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, TestConnectionResponseDto{
 		Reached:   result.Reached,
 		LatencyMs: result.LatencyMs,
 		Error:     result.Error,
 	})
+}
+
+func formatBool(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func (router *Router) writeProviderConfigError(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, err error) {

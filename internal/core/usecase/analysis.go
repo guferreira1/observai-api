@@ -97,6 +97,7 @@ func (useCase *Analysis) WithRedaction(redaction policy.ChainRedactor) *Analysis
 type AnalysisCompletionNotifier interface {
 	NotifyAnalysisCompleted(ctx context.Context, result domain.AnalysisResult)
 	NotifyAnalysisFailed(ctx context.Context, jobID string, request domain.AnalysisRequest, reason string)
+	NotifyAnalysisCanceled(ctx context.Context, jobID string, request domain.AnalysisRequest)
 }
 
 // WithCompletionNotifier wires a notifier invoked after RunAnalysisJob
@@ -268,6 +269,9 @@ func (useCase *Analysis) CancelJob(ctx context.Context, jobID string) (domain.An
 	canceled, findErr := useCase.jobs.Find(ctx, jobID)
 	if findErr != nil {
 		return domain.AnalysisJob{}, findErr
+	}
+	if useCase.notifier != nil {
+		useCase.notifier.NotifyAnalysisCanceled(context.Background(), canceled.ID, canceled.Request)
 	}
 	return canceled, nil
 }

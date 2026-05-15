@@ -140,6 +140,7 @@ func (router *Router) routes() {
 	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat", writer(router.handleChat))
 	router.mux.Method(stdhttp.MethodGet, "/v1/analyses/{analysisID}/chat", reader(router.handleChatHistory))
 	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat/{messageID}/feedback", writer(router.handleChatFeedback))
+	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat/{messageID}/regenerate", writer(router.handleChatRegenerate))
 
 	if router.setup != nil {
 		router.mux.Method(stdhttp.MethodGet, "/v1/setup/status", stdhttp.HandlerFunc(router.handleSetupStatus))
@@ -164,6 +165,9 @@ func (router *Router) routes() {
 		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks", admin(router.handleCreateWebhook))
 		router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhooks", admin(router.handleListWebhooks))
 		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/webhooks/{webhookID}", admin(router.handleDeleteWebhook))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks/{webhookID}/test", admin(router.handleTestWebhook))
+		router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhook-deliveries", admin(router.handleListWebhookDeliveries))
+		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhook-deliveries/{deliveryID}/retry", admin(router.handleRetryWebhookDelivery))
 	}
 	if router.auditLog != nil {
 		router.mux.Method(stdhttp.MethodGet, "/v1/admin/audit", admin(router.handleListAudit))
@@ -554,6 +558,32 @@ func (router *Router) handleChatHistory(writer stdhttp.ResponseWriter, request *
 	}
 
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toChatHistoryResponseDto(messages))
+}
+
+func (router *Router) handleChatRegenerate(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+	analysisID := strings.TrimSpace(chi.URLParam(request, "analysisID"))
+	messageID := strings.TrimSpace(chi.URLParam(request, "messageID"))
+	if analysisID == "" || messageID == "" {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusNotFound, "not_found", "chat message not found")
+		return
+	}
+	ctx := logger.With(request.Context(), slog.String("analysisId", analysisID), slog.String("messageId", messageID))
+	*request = *request.WithContext(ctx)
+
+	answer, err := router.chat.Regenerate(request.Context(), analysisID, messageID)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "chat.regenerated",
+		ResourceType: "chat_message",
+		ResourceID:   messageID,
+		Metadata:     map[string]string{"analysisId": analysisID},
+	})
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toChatResponseDto(answer))
 }
 
 func (router *Router) handleChatFeedback(writer stdhttp.ResponseWriter, request *stdhttp.Request) {

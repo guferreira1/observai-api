@@ -54,6 +54,26 @@ func (q *Queries) CreateChatMessage(ctx context.Context, arg CreateChatMessagePa
 	return i, err
 }
 
+const findChatMessageByID = `-- name: FindChatMessageByID :one
+SELECT id, analysis_id, role, content, evidence, created_at
+FROM analysis_chat_messages
+WHERE id = $1
+`
+
+func (q *Queries) FindChatMessageByID(ctx context.Context, id int64) (AnalysisChatMessage, error) {
+	row := q.db.QueryRow(ctx, findChatMessageByID, id)
+	var i AnalysisChatMessage
+	err := row.Scan(
+		&i.ID,
+		&i.AnalysisID,
+		&i.Role,
+		&i.Content,
+		&i.Evidence,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listChatMessagesByAnalysis = `-- name: ListChatMessagesByAnalysis :many
 SELECT
     id,

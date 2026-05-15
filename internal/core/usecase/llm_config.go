@@ -32,12 +32,26 @@ type LLMConfig struct {
 	cipher     ports.Cipher
 	tester     ports.ProviderTester
 	ids        ports.IDGenerator
+	reload     ReloadHook
 	now        func() time.Time
 }
 
 // NewLLMConfig creates an LLMConfig use case.
 func NewLLMConfig(repository ports.LLMConfigRepository, cipher ports.Cipher, tester ports.ProviderTester, ids ports.IDGenerator) *LLMConfig {
 	return &LLMConfig{repository: repository, cipher: cipher, tester: tester, ids: ids, now: time.Now}
+}
+
+// WithReloadHook installs a hook fired after mutations so the composition
+// root can rebuild the live adapter set.
+func (useCase *LLMConfig) WithReloadHook(hook ReloadHook) *LLMConfig {
+	useCase.reload = hook
+	return useCase
+}
+
+func (useCase *LLMConfig) fireReload(ctx context.Context) {
+	if useCase.reload != nil {
+		useCase.reload(ctx)
+	}
 }
 
 // Create persists a new LLM configuration.
@@ -76,6 +90,7 @@ func (useCase *LLMConfig) Create(ctx context.Context, request LLMConfigRequest) 
 		}
 		config.IsActive = true
 	}
+	useCase.fireReload(ctx)
 	return config, nil
 }
 
@@ -127,6 +142,7 @@ func (useCase *LLMConfig) Update(ctx context.Context, id string, request LLMConf
 	if err := useCase.repository.Update(ctx, current); err != nil {
 		return domain.LLMConfig{}, err
 	}
+	useCase.fireReload(ctx)
 	return current, nil
 }
 
@@ -141,7 +157,12 @@ func (useCase *LLMConfig) Activate(ctx context.Context, id string) (domain.LLMCo
 	if err := useCase.repository.Activate(ctx, cleaned, now); err != nil {
 		return domain.LLMConfig{}, err
 	}
-	return useCase.repository.Find(ctx, cleaned)
+	config, err := useCase.repository.Find(ctx, cleaned)
+	if err != nil {
+		return domain.LLMConfig{}, err
+	}
+	useCase.fireReload(ctx)
+	return config, nil
 }
 
 // Delete removes the LLM configuration.
@@ -150,7 +171,11 @@ func (useCase *LLMConfig) Delete(ctx context.Context, id string) error {
 	if cleaned == "" {
 		return domain.ErrLLMConfigNotFound
 	}
-	return useCase.repository.Delete(ctx, cleaned)
+	if err := useCase.repository.Delete(ctx, cleaned); err != nil {
+		return err
+	}
+	useCase.fireReload(ctx)
+	return nil
 }
 
 // Test runs a liveness probe against the supplied LLM configuration.

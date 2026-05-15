@@ -153,19 +153,21 @@ type AnalysisStatsTrendDto struct {
 
 // EvidenceDto describes normalized evidence returned to API clients.
 type EvidenceDto struct {
-	ID         string            `json:"id"`
-	Signal     string            `json:"signal"`
-	Service    string            `json:"service"`
-	Source     string            `json:"source"`
-	Name       string            `json:"name"`
-	Summary    string            `json:"summary"`
-	Observed   time.Time         `json:"observed"`
-	Score      float64           `json:"score"`
-	Unit       string            `json:"unit,omitempty"`
-	Reference  string            `json:"reference,omitempty"`
-	Provider   string            `json:"provider,omitempty"`
-	Query      string            `json:"query,omitempty"`
-	Attributes map[string]string `json:"attributes,omitempty"`
+	ID             string            `json:"id"`
+	Signal         string            `json:"signal"`
+	Service        string            `json:"service"`
+	Source         string            `json:"source"`
+	Name           string            `json:"name"`
+	Summary        string            `json:"summary"`
+	Observed       time.Time         `json:"observed"`
+	Score          float64           `json:"score"`
+	Confidence     float64           `json:"confidence,omitempty"`
+	Unit           string            `json:"unit,omitempty"`
+	Reference      string            `json:"reference,omitempty"`
+	Provider       string            `json:"provider,omitempty"`
+	Query          string            `json:"query,omitempty"`
+	Attributes     map[string]string `json:"attributes,omitempty"`
+	RedactedFields []string          `json:"redactedFields,omitempty"`
 }
 
 // RootCauseHypothesisDto describes a possible root cause returned to API clients.
@@ -307,19 +309,21 @@ func toAnalysisResponseDto(result domain.AnalysisResult) AnalysisResponseDto {
 	evidence := make([]EvidenceDto, 0, len(result.Evidence))
 	for _, item := range result.Evidence {
 		evidence = append(evidence, EvidenceDto{
-			ID:         item.ID,
-			Signal:     string(item.Signal),
-			Service:    item.Service,
-			Source:     item.Source,
-			Name:       item.Name,
-			Summary:    item.Summary,
-			Observed:   item.Observed,
-			Score:      item.Score,
-			Unit:       item.Unit,
-			Reference:  item.Reference,
-			Provider:   item.Provider,
-			Query:      item.Query,
-			Attributes: item.Attributes,
+			ID:             item.ID,
+			Signal:         string(item.Signal),
+			Service:        item.Service,
+			Source:         item.Source,
+			Name:           item.Name,
+			Summary:        item.Summary,
+			Observed:       item.Observed,
+			Score:          item.Score,
+			Confidence:     item.Confidence,
+			Unit:           item.Unit,
+			Reference:      item.Reference,
+			Provider:       item.Provider,
+			Query:          item.Query,
+			Attributes:     item.Attributes,
+			RedactedFields: item.RedactedFields,
 		})
 	}
 

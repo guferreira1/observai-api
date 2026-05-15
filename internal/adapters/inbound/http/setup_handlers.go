@@ -61,6 +61,16 @@ func (router *Router) handleBootstrapAdmin(writer stdhttp.ResponseWriter, reques
 	}
 
 	user, err := router.setup.BootstrapAdmin(request.Context(), dto.Email, dto.Password)
+	defer func() {
+		if user.ID != "" {
+			AnnotateAudit(request, AuditAnnotation{
+				Action:       "setup.completed",
+				ResourceType: "user",
+				ResourceID:   user.ID,
+				Metadata:     map[string]string{"email": user.Email},
+			})
+		}
+	}()
 	if err != nil {
 		if errors.Is(err, usecase.ErrSetupAlreadyCompleted) {
 			router.writeError(writer, requestID, startedAt, stdhttp.StatusConflict, "setup_already_completed", "initial admin already provisioned")
