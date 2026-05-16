@@ -51,5 +51,9 @@ func csrfMiddleware(provider providerSummaryProvider) func(stdhttp.Handler) stdh
 }
 
 func writeCSRFFailure(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider) {
-	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "csrf_token_invalid", "csrf token missing or invalid")
+	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "csrf_token_invalid", "csrf token missing or invalid", "http.csrf", []ErrorFieldDetail{{
+		Field:   CSRFHeaderName,
+		Rule:    "required_match",
+		Message: "Header must match the CSRF cookie issued with the session.",
+	}})
 }

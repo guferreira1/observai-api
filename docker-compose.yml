@@ -88,6 +88,17 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  jaeger:
+    image: jaegertracing/jaeger:2.17.0
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+      - "5778:5778"
+      - "8888:8888"
+      - "13133:13133"
+      - "9411:9411"
+
   grafana:
     image: grafana/grafana:11.3.0
     environment:
@@ -105,6 +116,8 @@ services:
       prometheus:
         condition: service_started
       elasticsearch:
+        condition: service_started
+      jaeger:
         condition: service_started
 
   ollama:

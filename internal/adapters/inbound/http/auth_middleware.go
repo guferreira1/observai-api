@@ -169,6 +169,7 @@ func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(st
 	return func(next stdhttp.Handler) stdhttp.Handler {
 		return stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			if authDisabled {
+				recordPrincipal(writer, openPrincipal)
 				next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), openPrincipal)))
 				return
 			}
@@ -179,6 +180,7 @@ func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(st
 
 			if cookieEnabled {
 				if principal, ok := resolveCookie(request, config.Signer, config.Users); ok {
+					recordPrincipal(writer, principal)
 					next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), principal)))
 					return
 				}
@@ -213,6 +215,7 @@ func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(st
 					writeUnauthorized(writer, request, provider)
 					return
 				}
+				recordPrincipal(writer, principal)
 				next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), principal)))
 				return
 			}
@@ -267,7 +270,7 @@ func RequireRole(roles ...domain.Role) func(stdhttp.HandlerFunc) stdhttp.Handler
 		return func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			principal, ok := PrincipalFromContext(request.Context())
 			if !ok || !allowed[principal.EffectiveRole()] {
-				writeForbidden(writer, request, nil)
+				writeRoleForbidden(writer, request, nil, roles)
 				return
 			}
 			next(writer, request)
@@ -282,12 +285,12 @@ func RequireScope(scopes ...domain.APIKeyScope) func(stdhttp.HandlerFunc) stdhtt
 		return func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			principal, ok := PrincipalFromContext(request.Context())
 			if !ok {
-				writeForbidden(writer, request, nil)
+				writeScopeForbidden(writer, request, nil, scopes)
 				return
 			}
 			for _, scope := range scopes {
 				if !principal.HasScope(scope) {
-					writeForbidden(writer, request, nil)
+					writeScopeForbidden(writer, request, nil, scopes)
 					return
 				}
 			}
@@ -368,20 +371,49 @@ func shouldSkipAuthentication(requestPath string, exactSkipPaths map[string]bool
 }
 
 func writeUnauthorized(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider) {
-	writeAuthFailure(writer, request, provider, stdhttp.StatusUnauthorized, "unauthorized", "missing or invalid credentials")
+	writeAuthFailure(writer, request, provider, stdhttp.StatusUnauthorized, "unauthorized", "missing or invalid credentials", "http.auth", nil)
 }
 
 func writeForbidden(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider) {
-	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges")
+	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges", "http.authorization", nil)
 }
 
-func writeAuthFailure(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, status int, code, message string) {
-	requestID := ""
-	if request != nil {
-		requestID = requestIDFromContext(request.Context())
-	}
-	writeMiddlewareErrorResponse(writer, requestID, status, "", ErrorResponse{
+func writeRoleForbidden(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, roles []domain.Role) {
+	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges", "http.authorization", []ErrorFieldDetail{{
+		Field:   "role",
+		Rule:    "required_role",
+		Message: "Requires one of: " + roleList(roles) + ".",
+	}})
+}
+
+func writeScopeForbidden(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, scopes []domain.APIKeyScope) {
+	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges", "http.authorization", []ErrorFieldDetail{{
+		Field:   "scope",
+		Rule:    "required_scope",
+		Message: "Requires all of: " + scopeList(scopes) + ".",
+	}})
+}
+
+func writeAuthFailure(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, status int, code, message string, source string, details []ErrorFieldDetail) {
+	writeMiddlewareErrorResponse(writer, request, status, "", source, ErrorResponse{
 		Code:    code,
 		Message: message,
+		Details: details,
 	}, middlewareProviderSummary(provider))
+}
+
+func roleList(roles []domain.Role) string {
+	values := make([]string, 0, len(roles))
+	for _, role := range roles {
+		values = append(values, string(role))
+	}
+	return strings.Join(values, ", ")
+}
+
+func scopeList(scopes []domain.APIKeyScope) string {
+	values := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		values = append(values, string(scope))
+	}
+	return strings.Join(values, ", ")
 }

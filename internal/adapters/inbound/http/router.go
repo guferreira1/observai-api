@@ -1,7 +1,6 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -740,7 +739,13 @@ func (router *Router) writeError(writer stdhttp.ResponseWriter, requestID string
 }
 
 func (router *Router) writeErrorResponse(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, response httpErrorResponse) {
-	router.logHTTPError(requestID, response)
+	recordError(writer, errorLogDetail{
+		Code:    response.code,
+		Message: response.message,
+		Cause:   response.cause,
+		Source:  "http.handler",
+		Details: response.details,
+	})
 	router.writeJSON(writer, response.status, WrapperDtoResponde[ErrorResponse]{
 		Data: ErrorResponse{
 			Code:    response.code,
@@ -753,38 +758,6 @@ func (router *Router) writeErrorResponse(writer stdhttp.ResponseWriter, requestI
 			Provider:         router.providerSummary(),
 		},
 	})
-}
-
-func (router *Router) logHTTPError(requestID string, response httpErrorResponse) {
-	if !shouldLogHTTPError(response) {
-		return
-	}
-
-	level := slog.LevelWarn
-	if response.status >= stdhttp.StatusInternalServerError {
-		level = slog.LevelError
-	}
-
-	logAttributes := []slog.Attr{
-		slog.String(requestIDLogKey, requestID),
-		slog.Int("status", response.status),
-		slog.String("code", response.code),
-		slog.String("message", SanitizeExternalMessage(response.message)),
-	}
-	if response.cause != "" && response.cause != response.message {
-		logAttributes = append(logAttributes, slog.String("cause", response.cause))
-	}
-	if len(response.details) > 0 {
-		logAttributes = append(logAttributes, slog.Any("details", response.details))
-	}
-	router.logger.LogAttrs(context.Background(), level, "http error", logAttributes...)
-}
-
-func shouldLogHTTPError(response httpErrorResponse) bool {
-	if response.status >= stdhttp.StatusInternalServerError {
-		return true
-	}
-	return response.code == "invalid_json" || response.code == "invalid_request"
 }
 
 func newRequestValidator() *validator.Validate {
