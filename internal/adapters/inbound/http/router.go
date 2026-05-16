@@ -34,7 +34,9 @@ type RouterOptions struct {
 	Readiness          stdhttp.Handler
 	ReadinessChecker   *health.Checker
 	Capabilities       CapabilitiesResponse
+	CapabilitiesFunc   func() CapabilitiesResponse
 	Provider           ProviderSummary
+	ProviderFunc       func() ProviderSummary
 	RetentionPolicy    RetentionPolicyOptions
 	Trace              *usecase.Trace
 	APIKeys            *usecase.APIKey
@@ -262,7 +264,7 @@ func (router *Router) handleMethodNotAllowed(writer stdhttp.ResponseWriter, requ
 func (router *Router) handleCapabilities(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 	startedAt := time.Now()
 	requestID := router.requestID(request)
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, router.options.Capabilities)
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, router.capabilities())
 }
 
 func (router *Router) handleSubmitAnalysis(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -720,6 +722,9 @@ func (router *Router) writeSuccessWithPagination(writer stdhttp.ResponseWriter, 
 }
 
 func (router *Router) providerSummary() ProviderSummary {
+	if router.options.ProviderFunc != nil {
+		return router.options.ProviderFunc()
+	}
 	if router.options.Provider.Mode != "" {
 		return router.options.Provider
 	}
@@ -728,6 +733,13 @@ func (router *Router) providerSummary() ProviderSummary {
 		LLM:           "fake",
 		Mode:          "local",
 	}
+}
+
+func (router *Router) capabilities() CapabilitiesResponse {
+	if router.options.CapabilitiesFunc != nil {
+		return router.options.CapabilitiesFunc()
+	}
+	return router.options.Capabilities
 }
 
 func (router *Router) writeError(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, status int, code string, message string) {

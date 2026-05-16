@@ -109,6 +109,14 @@ var domainErrorRules = []domainErrorRule{
 		},
 	},
 	{
+		match: func(err error) bool { return errors.Is(err, domain.ErrTraceNotFound) },
+		response: httpErrorResponse{
+			status:  stdhttp.StatusNotFound,
+			code:    "trace_not_found",
+			message: "analysis does not contain a trace reference",
+		},
+	},
+	{
 		match: func(err error) bool { return errors.Is(err, domain.ErrJobNotFound) },
 		response: httpErrorResponse{
 			status:  stdhttp.StatusNotFound,

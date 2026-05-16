@@ -94,6 +94,7 @@ func main() {
 		os.Exit(1)
 	}
 	registries := newAdapterRegistries(providers)
+	capabilities := newCapabilitiesStore(buildCapabilities(cfg, providers, version))
 
 	analysisUseCase := usecase.NewAnalysis(
 		registries.collector,
@@ -178,7 +179,7 @@ func main() {
 		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, ids)
 
 		reloadDeps := factoryDependencies(cfg, log, providerMetrics, credentialStore)
-		reload := newAdapterReloader(cfg, log, reloadDeps, registries, providerConfigUseCase, llmConfigUseCase)
+		reload := newAdapterReloader(cfg, log, reloadDeps, registries, capabilities, providerConfigUseCase, llmConfigUseCase)
 		providerConfigUseCase.WithReloadHook(reload)
 		llmConfigUseCase.WithReloadHook(reload)
 		reload(context.Background())
@@ -206,9 +207,7 @@ func main() {
 		defer scheduler.Stop()
 	}
 
-	checker := health.NewChecker(2*time.Second, buildHealthProbes(store, cache, providers, providerConfigUseCase, llmConfigUseCase)...)
-
-	capabilities := buildCapabilities(cfg, providers, version)
+	checker := health.NewChecker(10*time.Second, buildHealthProbes(store, cache, providers, providerConfigUseCase, llmConfigUseCase)...)
 
 	router := inboundhttp.NewRouter(analysisUseCase, chatUseCase, inboundhttp.RouterOptions{
 		Logger:             log,
@@ -238,22 +237,20 @@ func main() {
 		LLMConfigs:       llmConfigUseCase,
 		Metrics:          metricsHandler,
 		ReadinessChecker: checker,
-		Capabilities:     capabilities,
+		Capabilities:     capabilities.Get(),
+		CapabilitiesFunc: capabilities.Get,
 		RetentionPolicy: inboundhttp.RetentionPolicyOptions{
 			Days:     cfg.Scheduler.RetentionDays,
 			Quantity: cfg.Scheduler.RetentionQuantity,
 			Cron:     cfg.Scheduler.RetentionCron,
 		},
-		Provider: inboundhttp.ProviderSummary{
-			Mode:          capabilities.Mode,
-			LLM:           capabilities.LLM.Provider,
-			Observability: providerNames(capabilities.Observability),
-		},
-		Trace:     traceUseCase,
-		APIKeys:   apiKeyUseCase,
-		Webhooks:  webhookUseCase,
-		AuditLog:  auditLogUseCase,
-		Retention: retentionUseCase,
+		Provider:     capabilities.ProviderSummary(),
+		ProviderFunc: capabilities.ProviderSummary,
+		Trace:        traceUseCase,
+		APIKeys:      apiKeyUseCase,
+		Webhooks:     webhookUseCase,
+		AuditLog:     auditLogUseCase,
+		Retention:    retentionUseCase,
 	})
 	handler := metrics.Middleware(telemetry.WrapHandler("observai-api", router))
 	srv := server.New(cfg, handler)

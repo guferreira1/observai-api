@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -94,7 +95,10 @@ func (tester *Tester) run(ctx context.Context, method, baseURL, path, credential
 	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	target := strings.TrimRight(baseURL, "/") + path
+	target, err := buildProbeTarget(baseURL, path)
+	if err != nil {
+		return ports.ProviderTestResult{Error: inboundhttp.SanitizeExternalMessage(err.Error())}
+	}
 	request, err := http.NewRequestWithContext(probeCtx, method, target, nil)
 	if err != nil {
 		return ports.ProviderTestResult{Error: inboundhttp.SanitizeExternalMessage(err.Error())}
@@ -120,6 +124,70 @@ func (tester *Tester) run(ctx context.Context, method, baseURL, path, credential
 		return ports.ProviderTestResult{LatencyMs: latencyMs, Code: "provider_probe_failed", Error: fmt.Sprintf("upstream returned status %d", response.StatusCode)}
 	}
 	return ports.ProviderTestResult{Reached: true, LatencyMs: latencyMs}
+}
+
+func buildProbeTarget(baseURL, probePath string) (string, error) {
+	endpoint, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return "", fmt.Errorf("parse provider base url: %w", err)
+	}
+	if endpoint.Scheme == "" || endpoint.Host == "" {
+		return "", fmt.Errorf("provider base url must include scheme and host")
+	}
+
+	probeEndpoint, err := url.Parse(probePath)
+	if err != nil {
+		return "", fmt.Errorf("parse provider probe path: %w", err)
+	}
+	endpoint.Path = joinProbePath(endpoint.Path, probeEndpoint.Path)
+	if probeEndpoint.RawQuery != "" {
+		endpoint.RawQuery = probeEndpoint.RawQuery
+	}
+	return endpoint.String(), nil
+}
+
+func joinProbePath(basePath, probePath string) string {
+	baseSegments := splitPathSegments(basePath)
+	probeSegments := splitPathSegments(probePath)
+	overlap := pathSegmentOverlap(baseSegments, probeSegments)
+
+	joinedSegments := make([]string, 0, len(baseSegments)+len(probeSegments)-overlap)
+	joinedSegments = append(joinedSegments, baseSegments...)
+	joinedSegments = append(joinedSegments, probeSegments[overlap:]...)
+	if len(joinedSegments) == 0 {
+		return "/"
+	}
+	return "/" + strings.Join(joinedSegments, "/")
+}
+
+func splitPathSegments(path string) []string {
+	cleaned := strings.Trim(path, "/")
+	if cleaned == "" {
+		return nil
+	}
+	return strings.Split(cleaned, "/")
+}
+
+func pathSegmentOverlap(baseSegments, probeSegments []string) int {
+	maxOverlap := min(len(baseSegments), len(probeSegments))
+	for overlap := maxOverlap; overlap > 0; overlap-- {
+		if equalPathSegments(baseSegments[len(baseSegments)-overlap:], probeSegments[:overlap]) {
+			return overlap
+		}
+	}
+	return 0
+}
+
+func equalPathSegments(leftSegments, rightSegments []string) bool {
+	if len(leftSegments) != len(rightSegments) {
+		return false
+	}
+	for index := range leftSegments {
+		if leftSegments[index] != rightSegments[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func noAuth(*http.Request, string) {}

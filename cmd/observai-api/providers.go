@@ -256,7 +256,7 @@ func factoryDependencies(cfg config.Config, log *slog.Logger, observer observabi
 // Failures are logged at warn level and never propagated so a bad
 // provider configuration cannot wedge the API; the previous adapter set
 // stays in use until the operator fixes the configuration.
-func newAdapterReloader(cfg config.Config, log *slog.Logger, deps factory.Dependencies, registries adapterRegistries, providerConfigs *usecase.ProviderConfig, llmConfigs *usecase.LLMConfig) usecase.ReloadHook {
+func newAdapterReloader(cfg config.Config, log *slog.Logger, deps factory.Dependencies, registries adapterRegistries, capabilities *capabilitiesStore, providerConfigs *usecase.ProviderConfig, llmConfigs *usecase.LLMConfig) usecase.ReloadHook {
 	return func(ctx context.Context) {
 		if providerConfigs != nil {
 			dbConfigs, err := providerConfigs.ListActiveConfigs(ctx)
@@ -268,6 +268,11 @@ func newAdapterReloader(cfg config.Config, log *slog.Logger, deps factory.Depend
 					log.Warn("reload: build observability failed", "error", err)
 				} else {
 					registries.collector.Set(result.Collector)
+					if capabilities != nil {
+						snapshot := capabilities.Get()
+						snapshot.Observability = toCapabilityProviders(toObservabilityProviders(result.Capabilities))
+						capabilities.Set(snapshot)
+					}
 					if trace, err := factory.BuildTraceProvider(merged, deps); err != nil {
 						log.Warn("reload: build trace provider failed", "error", err)
 					} else if trace.Provider != nil {
@@ -289,6 +294,12 @@ func newAdapterReloader(cfg config.Config, log *slog.Logger, deps factory.Depend
 					}
 					if result.Responder != nil {
 						registries.responder.Set(result.Responder)
+					}
+					if capabilities != nil {
+						snapshot := capabilities.Get()
+						snapshot.LLM.Provider = result.Provider
+						snapshot.LLM.Model = result.Model
+						capabilities.Set(snapshot)
 					}
 				}
 			}

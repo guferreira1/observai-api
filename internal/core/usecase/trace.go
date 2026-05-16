@@ -71,7 +71,7 @@ func (useCase *Trace) Get(ctx context.Context, analysisID string) (domain.TraceI
 
 	traceReference := strings.TrimSpace(analysis.TraceID)
 	if traceReference == "" {
-		traceReference = analysisID
+		return domain.TraceInsights{}, fmt.Errorf("%w: analysis does not contain a trace id", domain.ErrTraceNotFound)
 	}
 
 	spans, err := useCase.traces.FetchSpans(ctx, traceReference)

@@ -29,6 +29,9 @@ var ErrAnalysisContextNotFound = errors.New("analysis context not found")
 // without configuring the corresponding observability or LLM provider.
 var ErrProviderNotConfigured = errors.New("provider not configured")
 
+// ErrTraceNotFound indicates that an analysis has no retrievable trace reference.
+var ErrTraceNotFound = errors.New("trace not found")
+
 // Severity describes the operational impact detected by an analysis.
 type Severity string
 
