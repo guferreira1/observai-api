@@ -42,11 +42,21 @@ Cliente HTTP -> adaptadores inbound -> casos de uso -> domínio/políticas
 OBSERVAI_API_PORT=8080 \
 OBSERVAI_ENV=local \
 OBSERVAI_MODE=local \
+OBSERVAI_TIMEZONE=Local \
 OBSERVAI_DATABASE_DSN=postgres://observai:observai@localhost:5432/observai?sslmode=disable \
 OBSERVAI_REDIS_URL=redis://localhost:6379/0 \
-OBSERVAI_ENCRYPTION_KEY=change-me-at-least-32-characters-long \
+OBSERVAI_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+OBSERVAI_JWT_SECRET=local-development-jwt-secret-change-before-production \
 go run ./cmd/observai-api
 ```
+
+Se existir um arquivo `.env` no diretório de execução da API, ele é carregado
+automaticamente no startup. Variáveis já exportadas continuam tendo prioridade.
+
+A imagem Docker define `TZ=America/Sao_Paulo` por padrão, então
+`OBSERVAI_TIMEZONE=Local` usa o timezone do container. Para outro padrão,
+use `--build-arg DEFAULT_TIMEZONE=Etc/UTC`, ou sobrescreva `TZ`/
+`OBSERVAI_TIMEZONE` no runtime do deploy.
 
 2. Envie uma análise:
 

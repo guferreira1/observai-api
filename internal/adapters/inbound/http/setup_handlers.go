@@ -20,6 +20,7 @@ type SetupStatusResponseDto struct {
 
 // BootstrapAdminRequestDto is the payload accepted by POST /v1/setup/admin.
 type BootstrapAdminRequestDto struct {
+	Name     string `json:"name,omitempty"`
 	Email    string `json:"email" validate:"required,email"`
 	Password string `json:"password" validate:"required,min=8"`
 }
@@ -60,7 +61,11 @@ func (router *Router) handleBootstrapAdmin(writer stdhttp.ResponseWriter, reques
 		return
 	}
 
-	user, err := router.setup.BootstrapAdmin(request.Context(), dto.Email, dto.Password)
+	user, err := router.setup.BootstrapAdminWithOptions(request.Context(), usecase.BootstrapAdminRequest{
+		Name:     dto.Name,
+		Email:    dto.Email,
+		Password: dto.Password,
+	})
 	defer func() {
 		if user.ID != "" {
 			AnnotateAudit(request, AuditAnnotation{
@@ -87,5 +92,24 @@ func (router *Router) handleBootstrapAdmin(writer stdhttp.ResponseWriter, reques
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, toUserResponseDto(user))
+	if router.sessions == nil {
+		router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, router.toUserResponseDto(user))
+		return
+	}
+	session, err := router.sessions.StartSessionForUser(request.Context(), user)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	csrf, err := generateCSRFToken()
+	if err != nil {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
+		return
+	}
+	router.setSessionCookies(writer, session, csrf)
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, SessionResponseDto{
+		User:      router.toUserResponseDto(session.User),
+		CSRFToken: csrf,
+		ExpiresAt: router.formatTime(session.Access.ExpiresAt),
+	})
 }

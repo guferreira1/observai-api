@@ -144,8 +144,9 @@ const CSRFCookieName = "oai_csrf"
 // The middleware tries credentials in order: JWT cookie first (when a
 // signer and user repository are configured), then static API keys, then
 // persisted API keys. Operational endpoints listed in Skip bypass
-// authentication entirely. When no credential source is configured the
-// middleware is a no-op so local development runs without secrets.
+// authentication entirely. When no credential source is configured, local
+// development receives an anonymous non-admin principal that can use analysis
+// and chat routes without unlocking administrative endpoints.
 func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(stdhttp.Handler) stdhttp.Handler {
 	staticKeys := indexKeys(config.StaticKeys)
 	adminKeys := indexKeys(config.AdminKeys)
@@ -158,7 +159,11 @@ func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(st
 	openPrincipal := AuthPrincipal{
 		Source: AuthSourceAPIKey,
 		Name:   "anonymous",
-		Scopes: domain.AllAPIKeyScopes(),
+		Scopes: []domain.APIKeyScope{
+			domain.APIKeyScopeAnalysisRead,
+			domain.APIKeyScopeAnalysisWrite,
+			domain.APIKeyScopeChatWrite,
+		},
 	}
 
 	return func(next stdhttp.Handler) stdhttp.Handler {

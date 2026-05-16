@@ -34,6 +34,11 @@ func main() {
 		os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(1)
 	}
+	timeLocation, err := cfg.TimeLocation()
+	if err != nil {
+		os.Stderr.WriteString(err.Error() + "\n")
+		os.Exit(1)
+	}
 
 	log := logger.New(cfg.Env)
 
@@ -225,6 +230,7 @@ func main() {
 			Domain: cfg.Cookies.Domain,
 			Secure: cfg.Cookies.Secure,
 		},
+		TimeLocation:     timeLocation,
 		Sessions:         authUseCase,
 		Users:            userUseCase,
 		Setup:            setupUseCase,

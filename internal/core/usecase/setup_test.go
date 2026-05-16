@@ -76,12 +76,19 @@ func TestSetupStatusReportsCompletedWhenEverythingIsConfigured(t *testing.T) {
 
 func TestSetupBootstrapAdminCreatesAdminUser(t *testing.T) {
 	setup, users := newSetupFixture(t, stubInventory{})
-	user, err := setup.BootstrapAdmin(context.Background(), "admin@observai.io", "CorrectHorse42")
+	user, err := setup.BootstrapAdminWithOptions(context.Background(), BootstrapAdminRequest{
+		Name:     "Gustavo Ferreira",
+		Email:    "admin@observai.io",
+		Password: "CorrectHorse42",
+	})
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	if user.Role != domain.RoleAdmin || !user.IsActive {
 		t.Fatalf("unexpected admin user: %+v", user)
+	}
+	if user.Name != "Gustavo Ferreira" {
+		t.Fatalf("expected admin name persisted, got %q", user.Name)
 	}
 	count, _ := users.Count(context.Background())
 	if count != 1 {

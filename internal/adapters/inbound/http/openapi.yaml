@@ -581,8 +581,19 @@ paths:
       tags: [setup]
       summary: Bootstrap the initial admin user. Rejected once any user exists.
       operationId: bootstrapAdmin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BootstrapAdminRequestDto"
       responses:
-        "201": { description: Initial admin created. }
+        "201":
+          description: Initial admin created and session issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_SessionResponseDto"
         "409": { description: Setup already completed. }
 
   /v1/auth/login:
@@ -620,7 +631,7 @@ paths:
         "200": { description: User profile. }
     patch:
       tags: [profile]
-      summary: Update the authenticated user's email.
+      summary: Update the authenticated user's profile.
       operationId: updateMe
       responses:
         "200": { description: Updated profile. }
@@ -990,10 +1001,11 @@ components:
               value:
                 data:
                   code: invalid_json
-                  message: request body contains unknown field
+                  message: Remove unsupported field "severity" from the request and try again.
                   details:
                     - field: severity
                       rule: unknown_field
+                      message: This field is not accepted by this endpoint.
                 metadata:
                   requestId: a1
                   processingTimeMs: 1
@@ -1002,10 +1014,11 @@ components:
               value:
                 data:
                   code: invalid_request
-                  message: request validation failed
+                  message: Some submitted fields are invalid. Review the highlighted fields and try again.
                   details:
                     - field: goal
                       rule: required
+                      message: This field is required.
                 metadata:
                   requestId: a2
                   processingTimeMs: 1
@@ -1175,7 +1188,7 @@ components:
             `invalid_request`, `analysis_not_found`,
             `analysis_context_not_found`, `request_body_too_large`,
             `request_canceled`, `request_timeout`, `provider_auth_failed`,
-            `internal_error`.
+            `feature_not_configured`, `internal_error`.
           enum:
             - invalid_analysis_request
             - invalid_analysis_filter
@@ -1193,7 +1206,12 @@ components:
             - request_body_too_large
             - request_canceled
             - request_timeout
+            - unauthorized
+            - forbidden
+            - csrf_token_invalid
             - provider_auth_failed
+            - provider_not_configured
+            - feature_not_configured
             - webhook_not_found
             - webhook_delivery_not_found
             - not_found
@@ -1790,9 +1808,10 @@ components:
 
     UserResponseDto:
       type: object
-      required: [id, email, role, isActive, mustChangePassword, preferences, createdAt, updatedAt]
+      required: [id, name, email, role, isActive, mustChangePassword, preferences, createdAt, updatedAt]
       properties:
         id: { type: string }
+        name: { type: string }
         email: { type: string, format: email }
         role: { type: string, enum: [admin, operator, viewer] }
         isActive: { type: boolean }
@@ -1801,8 +1820,14 @@ components:
           description: Frontend must force a password-change flow before normal use when true.
         preferences:
           $ref: "#/components/schemas/PreferencesDto"
-        createdAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time }
+        createdAt:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp formatted in the configured instance timezone.
+        updatedAt:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp formatted in the configured instance timezone.
         lastLoginAt: { type: string, format: date-time, nullable: true }
     UpdatePreferencesRequestDto:
       type: object
@@ -1850,13 +1875,24 @@ components:
         user:
           $ref: "#/components/schemas/UserResponseDto"
         csrfToken: { type: string }
-        expiresAt: { type: string, format: date-time }
+        expiresAt:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp formatted in the configured instance timezone.
     WrapperDtoResponde_UserResponseDto:
       type: object
       required: [data, metadata]
       properties:
         data:
           $ref: "#/components/schemas/UserResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_SessionResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/SessionResponseDto"
         metadata:
           $ref: "#/components/schemas/ResponseMetadata"
     WrapperDtoResponde_PreferencesDto:
@@ -1883,15 +1919,6 @@ components:
           $ref: "#/components/schemas/MyKeysResponseDto"
         metadata:
           $ref: "#/components/schemas/ResponseMetadata"
-    WrapperDtoResponde_SessionResponseDto:
-      type: object
-      required: [data, metadata]
-      properties:
-        data:
-          $ref: "#/components/schemas/SessionResponseDto"
-        metadata:
-          $ref: "#/components/schemas/ResponseMetadata"
-
     # ---- Setup ---------------------------------------------------------------
 
     SetupStatusResponseDto:
@@ -1903,6 +1930,13 @@ components:
         observabilityConfigured: { type: boolean }
         setupCompleted: { type: boolean }
         state: { type: string, enum: [pending, completed, degraded] }
+    BootstrapAdminRequestDto:
+      type: object
+      required: [email, password]
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 8 }
     WrapperDtoResponde_SetupStatusResponseDto:
       type: object
       required: [data, metadata]

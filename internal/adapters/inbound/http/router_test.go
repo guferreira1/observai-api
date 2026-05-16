@@ -14,6 +14,7 @@ import (
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/testfakes"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
+	"github.com/guferreira1/observai-api/internal/platform/crypto"
 	"github.com/guferreira1/observai-api/internal/platform/health"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -282,13 +283,15 @@ func TestRouterReturnsValidationDetailsOnPayloadFailure(t *testing.T) {
 	var payload WrapperDtoResponde[ErrorResponse]
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
 	assert.Equal(t, "invalid_request", payload.Data.Code)
+	assert.Equal(t, "Some submitted fields are invalid. Review the highlighted fields and try again.", payload.Data.Message)
 	require.NotEmpty(t, payload.Data.Details)
 
 	missingGoal := false
 	for _, detail := range payload.Data.Details {
-		if detail.Field == "Goal" || detail.Field == "goal" {
+		if detail.Field == "goal" {
 			missingGoal = true
 			assert.Equal(t, "required", detail.Rule)
+			assert.Equal(t, "This field is required.", detail.Message)
 		}
 	}
 	assert.True(t, missingGoal, "expected goal field to be reported as required")
@@ -364,8 +367,116 @@ func TestRouterRejectsBodyWithUnknownFields(t *testing.T) {
 	var payload WrapperDtoResponde[ErrorResponse]
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
 	assert.Equal(t, "invalid_json", payload.Data.Code)
+	assert.Equal(t, `Remove unsupported field "unexpectedField" from the request and try again.`, payload.Data.Message)
 	require.NotEmpty(t, payload.Data.Details)
+	assert.Equal(t, "unexpectedField", payload.Data.Details[0].Field)
 	assert.Equal(t, "unknown_field", payload.Data.Details[0].Rule)
+	assert.Equal(t, "This field is not accepted by this endpoint.", payload.Data.Details[0].Message)
+}
+
+func TestRouterLogsSetupAdminUnknownField(t *testing.T) {
+	t.Parallel()
+
+	var logBuffer bytes.Buffer
+	userRepository := inmemory.NewUserRepository()
+	setup := usecase.NewSetup(
+		userRepository,
+		usecase.NewUser(userRepository, nil, testfakes.NewIDGenerator("user")),
+		nil,
+	)
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(&logBuffer, nil)),
+		RequestTimeout: 5 * time.Second,
+		Setup:          setup,
+	})
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42",
+		"confirmPassword": "CorrectHorse42"
+	}`))
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "invalid_json", payload.Data.Code)
+	assert.Equal(t, `Remove unsupported field "confirmPassword" from the request and try again.`, payload.Data.Message)
+	assert.Contains(t, logBuffer.String(), "http error")
+	assert.Contains(t, logBuffer.String(), "invalid_json")
+	assert.Contains(t, logBuffer.String(), "confirmPassword")
+}
+
+func TestRouterBootstrapAdminAcceptsName(t *testing.T) {
+	t.Parallel()
+
+	userRepository := inmemory.NewUserRepository()
+	refreshRepository := inmemory.NewRefreshTokenRepository()
+	signer, err := crypto.NewJWTSigner(bytes.Repeat([]byte{0xab}, crypto.MinJWTSecretLength), "observai-api")
+	require.NoError(t, err)
+	setup := usecase.NewSetup(
+		userRepository,
+		usecase.NewUser(userRepository, refreshRepository, testfakes.NewIDGenerator("user")),
+		nil,
+	)
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: 5 * time.Second,
+		Setup:          setup,
+		Sessions: usecase.NewAuth(userRepository, refreshRepository, signer, testfakes.NewIDGenerator("session"), usecase.AuthOptions{
+			AccessTokenTTL:  15 * time.Minute,
+			RefreshTokenTTL: time.Hour,
+		}),
+	})
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusCreated, response.Code)
+	assert.NotEmpty(t, response.Header().Values("Set-Cookie"))
+	var payload WrapperDtoResponde[SessionResponseDto]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "Gustavo Ferreira", payload.Data.User.Name)
+	assert.Equal(t, "admin@observai.io", payload.Data.User.Email)
+	assert.NotEmpty(t, payload.Data.CSRFToken)
+	assert.NotEmpty(t, payload.Data.ExpiresAt)
+}
+
+func TestRouterFormatsBootstrapAdminTimestampsInConfiguredTimezone(t *testing.T) {
+	t.Parallel()
+
+	userRepository := inmemory.NewUserRepository()
+	setup := usecase.NewSetup(
+		userRepository,
+		usecase.NewUser(userRepository, nil, testfakes.NewIDGenerator("user")),
+		nil,
+	)
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: 5 * time.Second,
+		Setup:          setup,
+		TimeLocation:   time.FixedZone("America/Sao_Paulo", -3*60*60),
+	})
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusCreated, response.Code)
+	var payload WrapperDtoResponde[UserResponseDto]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Contains(t, payload.Data.CreatedAt, "-03:00")
+	assert.Contains(t, payload.Data.UpdatedAt, "-03:00")
 }
 
 func TestRouterReturnsNotFoundForMissingAnalysis(t *testing.T) {
@@ -722,6 +833,42 @@ func TestRouterHealthzAndReadyzUseEnvelope(t *testing.T) {
 	assert.Equal(t, "database", readyPayload.Data.Checks[0].Name)
 	assert.Equal(t, "redis", readyPayload.Data.Checks[1].Name)
 	assert.NotEmpty(t, readyPayload.Metadata.RequestID)
+}
+
+func TestRouterReportsDisabledOptionalRoutes(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{stdhttp.MethodGet, "/v1/setup/status"},
+		{stdhttp.MethodPost, "/v1/auth/login"},
+		{stdhttp.MethodGet, "/v1/me"},
+		{stdhttp.MethodGet, "/v1/admin/users"},
+		{stdhttp.MethodGet, "/v1/admin/providers"},
+		{stdhttp.MethodGet, "/v1/admin/llm-providers"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.method+" "+testCase.path, func(t *testing.T) {
+			request := httptest.NewRequest(testCase.method, testCase.path, nil)
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			require.Equal(t, stdhttp.StatusServiceUnavailable, response.Code)
+
+			var payload WrapperDtoResponde[ErrorResponse]
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+			assert.Equal(t, "feature_not_configured", payload.Data.Code)
+			assert.NotEmpty(t, payload.Metadata.RequestID)
+		})
+	}
 }
 
 func TestRouterAcceptsTelemetry(t *testing.T) {

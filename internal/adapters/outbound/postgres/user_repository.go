@@ -45,6 +45,7 @@ func (repository *UserRepository) Create(ctx context.Context, user domain.User) 
 
 	err = repository.queries.CreateUser(ctx, sqlc.CreateUserParams{
 		ID:                 user.ID,
+		Name:               strings.TrimSpace(user.Name),
 		Email:              strings.ToLower(strings.TrimSpace(user.Email)),
 		PasswordHash:       user.PasswordHash,
 		Role:               string(user.Role),
@@ -76,7 +77,7 @@ func (repository *UserRepository) FindByID(ctx context.Context, id string) (user
 	if err != nil {
 		return domain.User{}, fmt.Errorf("find user: %w", err)
 	}
-	return rowToDomainUser(row.ID, row.Email, row.PasswordHash, row.Role, row.IsActive, row.MustChangePassword, row.Preferences, row.CreatedAt, row.UpdatedAt, row.LastLoginAt), nil
+	return rowToDomainUser(row.ID, row.Name, row.Email, row.PasswordHash, row.Role, row.IsActive, row.MustChangePassword, row.Preferences, row.CreatedAt, row.UpdatedAt, row.LastLoginAt), nil
 }
 
 // FindByEmail returns the user matching the supplied email (case-insensitive).
@@ -91,7 +92,7 @@ func (repository *UserRepository) FindByEmail(ctx context.Context, email string)
 	if err != nil {
 		return domain.User{}, fmt.Errorf("find user by email: %w", err)
 	}
-	return rowToDomainUser(row.ID, row.Email, row.PasswordHash, row.Role, row.IsActive, row.MustChangePassword, row.Preferences, row.CreatedAt, row.UpdatedAt, row.LastLoginAt), nil
+	return rowToDomainUser(row.ID, row.Name, row.Email, row.PasswordHash, row.Role, row.IsActive, row.MustChangePassword, row.Preferences, row.CreatedAt, row.UpdatedAt, row.LastLoginAt), nil
 }
 
 // List returns persisted users ordered by creation time, newest first.
@@ -108,7 +109,7 @@ func (repository *UserRepository) List(ctx context.Context, limit int, offset in
 	}
 	out := make([]domain.User, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, rowToDomainUser(row.ID, row.Email, row.PasswordHash, row.Role, row.IsActive, row.MustChangePassword, row.Preferences, row.CreatedAt, row.UpdatedAt, row.LastLoginAt))
+		out = append(out, rowToDomainUser(row.ID, row.Name, row.Email, row.PasswordHash, row.Role, row.IsActive, row.MustChangePassword, row.Preferences, row.CreatedAt, row.UpdatedAt, row.LastLoginAt))
 	}
 	return out, nil
 }
@@ -120,13 +121,14 @@ func (repository *UserRepository) Count(ctx context.Context) (count int64, err e
 	return repository.queries.CountUsers(ctx)
 }
 
-// UpdateProfile updates a user's email.
-func (repository *UserRepository) UpdateProfile(ctx context.Context, id string, email string, updatedAt time.Time) (err error) {
+// UpdateProfile updates a user's profile.
+func (repository *UserRepository) UpdateProfile(ctx context.Context, id string, name string, email string, updatedAt time.Time) (err error) {
 	startedAt := time.Now()
 	defer func() { repository.observe("update_user_profile", startedAt, err) }()
 
 	err = repository.queries.UpdateUserProfile(ctx, sqlc.UpdateUserProfileParams{
 		ID:        id,
+		Name:      strings.TrimSpace(name),
 		Email:     strings.ToLower(strings.TrimSpace(email)),
 		UpdatedAt: pgtype.Timestamptz{Time: updatedAt, Valid: true},
 	})
@@ -214,9 +216,10 @@ func (repository *UserRepository) Delete(ctx context.Context, id string) (err er
 	return repository.queries.DeleteUser(ctx, id)
 }
 
-func rowToDomainUser(id, email, hash, role string, isActive bool, mustChangePassword bool, preferences []byte, createdAt, updatedAt, lastLoginAt pgtype.Timestamptz) domain.User {
+func rowToDomainUser(id, name, email, hash, role string, isActive bool, mustChangePassword bool, preferences []byte, createdAt, updatedAt, lastLoginAt pgtype.Timestamptz) domain.User {
 	user := domain.User{
 		ID:                 id,
+		Name:               name,
 		Email:              email,
 		PasswordHash:       hash,
 		Role:               domain.Role(role),

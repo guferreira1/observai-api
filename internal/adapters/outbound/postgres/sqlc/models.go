@@ -138,6 +138,7 @@ type User struct {
 	LastLoginAt        pgtype.Timestamptz `json:"last_login_at"`
 	MustChangePassword bool               `json:"must_change_password"`
 	Preferences        []byte             `json:"preferences"`
+	Name               string             `json:"name"`
 }
 
 type WebhookDelivery struct {

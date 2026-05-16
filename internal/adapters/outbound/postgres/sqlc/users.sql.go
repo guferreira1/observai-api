@@ -23,12 +23,13 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 }
 
 const createUser = `-- name: CreateUser :exec
-INSERT INTO users (id, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO users (id, name, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 `
 
 type CreateUserParams struct {
 	ID                 string             `json:"id"`
+	Name               string             `json:"name"`
 	Email              string             `json:"email"`
 	PasswordHash       string             `json:"password_hash"`
 	Role               string             `json:"role"`
@@ -42,6 +43,7 @@ type CreateUserParams struct {
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) error {
 	_, err := q.db.Exec(ctx, createUser,
 		arg.ID,
+		arg.Name,
 		arg.Email,
 		arg.PasswordHash,
 		arg.Role,
@@ -65,13 +67,14 @@ func (q *Queries) DeleteUser(ctx context.Context, id string) error {
 }
 
 const findUserByEmail = `-- name: FindUserByEmail :one
-SELECT id, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at, last_login_at
+SELECT id, name, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at, last_login_at
 FROM users
 WHERE email = $1
 `
 
 type FindUserByEmailRow struct {
 	ID                 string             `json:"id"`
+	Name               string             `json:"name"`
 	Email              string             `json:"email"`
 	PasswordHash       string             `json:"password_hash"`
 	Role               string             `json:"role"`
@@ -88,6 +91,7 @@ func (q *Queries) FindUserByEmail(ctx context.Context, email string) (FindUserBy
 	var i FindUserByEmailRow
 	err := row.Scan(
 		&i.ID,
+		&i.Name,
 		&i.Email,
 		&i.PasswordHash,
 		&i.Role,
@@ -102,13 +106,14 @@ func (q *Queries) FindUserByEmail(ctx context.Context, email string) (FindUserBy
 }
 
 const findUserByID = `-- name: FindUserByID :one
-SELECT id, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at, last_login_at
+SELECT id, name, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at, last_login_at
 FROM users
 WHERE id = $1
 `
 
 type FindUserByIDRow struct {
 	ID                 string             `json:"id"`
+	Name               string             `json:"name"`
 	Email              string             `json:"email"`
 	PasswordHash       string             `json:"password_hash"`
 	Role               string             `json:"role"`
@@ -125,6 +130,7 @@ func (q *Queries) FindUserByID(ctx context.Context, id string) (FindUserByIDRow,
 	var i FindUserByIDRow
 	err := row.Scan(
 		&i.ID,
+		&i.Name,
 		&i.Email,
 		&i.PasswordHash,
 		&i.Role,
@@ -139,7 +145,7 @@ func (q *Queries) FindUserByID(ctx context.Context, id string) (FindUserByIDRow,
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at, last_login_at
+SELECT id, name, email, password_hash, role, is_active, must_change_password, preferences, created_at, updated_at, last_login_at
 FROM users
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $1
@@ -152,6 +158,7 @@ type ListUsersParams struct {
 
 type ListUsersRow struct {
 	ID                 string             `json:"id"`
+	Name               string             `json:"name"`
 	Email              string             `json:"email"`
 	PasswordHash       string             `json:"password_hash"`
 	Role               string             `json:"role"`
@@ -174,6 +181,7 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]ListUse
 		var i ListUsersRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.Name,
 			&i.Email,
 			&i.PasswordHash,
 			&i.Role,
@@ -281,18 +289,24 @@ func (q *Queries) UpdateUserPreferences(ctx context.Context, arg UpdateUserPrefe
 
 const updateUserProfile = `-- name: UpdateUserProfile :exec
 UPDATE users
-SET email = $1, updated_at = $2
-WHERE id = $3
+SET name = $1, email = $2, updated_at = $3
+WHERE id = $4
 `
 
 type UpdateUserProfileParams struct {
+	Name      string             `json:"name"`
 	Email     string             `json:"email"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 	ID        string             `json:"id"`
 }
 
 func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) error {
-	_, err := q.db.Exec(ctx, updateUserProfile, arg.Email, arg.UpdatedAt, arg.ID)
+	_, err := q.db.Exec(ctx, updateUserProfile,
+		arg.Name,
+		arg.Email,
+		arg.UpdatedAt,
+		arg.ID,
+	)
 	return err
 }
 

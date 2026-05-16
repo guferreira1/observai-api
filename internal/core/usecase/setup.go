@@ -37,6 +37,13 @@ type SetupStatus struct {
 	State                   SetupState
 }
 
+// BootstrapAdminRequest carries the first-run admin creation payload.
+type BootstrapAdminRequest struct {
+	Name     string
+	Email    string
+	Password string
+}
+
 // Setup orchestrates the first-run installation flow.
 type Setup struct {
 	users     ports.UserRepository
@@ -85,6 +92,14 @@ func (useCase *Setup) Status(ctx context.Context) (SetupStatus, error) {
 // ErrSetupAlreadyCompleted when any user already exists so the public
 // endpoint cannot be used to add admins after installation.
 func (useCase *Setup) BootstrapAdmin(ctx context.Context, email, password string) (domain.User, error) {
+	return useCase.BootstrapAdminWithOptions(ctx, BootstrapAdminRequest{
+		Email:    email,
+		Password: password,
+	})
+}
+
+// BootstrapAdminWithOptions creates the initial admin user with profile data.
+func (useCase *Setup) BootstrapAdminWithOptions(ctx context.Context, request BootstrapAdminRequest) (domain.User, error) {
 	count, err := useCase.users.Count(ctx)
 	if err != nil {
 		return domain.User{}, fmt.Errorf("count users: %w", err)
@@ -95,7 +110,12 @@ func (useCase *Setup) BootstrapAdmin(ctx context.Context, email, password string
 	if useCase.userAdmin == nil {
 		return domain.User{}, fmt.Errorf("setup: user use case not configured")
 	}
-	user, err := useCase.userAdmin.Create(ctx, email, password, domain.RoleAdmin)
+	user, err := useCase.userAdmin.CreateWithOptions(ctx, UserCreateRequest{
+		Name:     request.Name,
+		Email:    request.Email,
+		Password: request.Password,
+		Role:     domain.RoleAdmin,
+	})
 	if err != nil {
 		return domain.User{}, err
 	}

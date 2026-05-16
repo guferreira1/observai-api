@@ -40,6 +40,7 @@ func (useCase *User) Create(ctx context.Context, email, password string, role do
 
 // UserCreateRequest carries admin-facing user provisioning options.
 type UserCreateRequest struct {
+	Name               string
 	Email              string
 	Password           string
 	Role               domain.Role
@@ -53,6 +54,7 @@ func (useCase *User) CreateWithOptions(ctx context.Context, request UserCreateRe
 	if err != nil {
 		return domain.User{}, err
 	}
+	cleanedName := normalizeUserName(request.Name, cleanedEmail)
 	if len(request.Password) < minPasswordLength {
 		return domain.User{}, fmt.Errorf("%w: password must be at least %d characters", domain.ErrInvalidUser, minPasswordLength)
 	}
@@ -70,6 +72,7 @@ func (useCase *User) CreateWithOptions(ctx context.Context, request UserCreateRe
 	now := useCase.now().UTC()
 	user := domain.User{
 		ID:                 id,
+		Name:               cleanedName,
 		Email:              cleanedEmail,
 		PasswordHash:       hash,
 		Role:               request.Role,
@@ -83,6 +86,17 @@ func (useCase *User) CreateWithOptions(ctx context.Context, request UserCreateRe
 		return domain.User{}, err
 	}
 	return user, nil
+}
+
+func normalizeUserName(name string, email string) string {
+	cleanedName := strings.TrimSpace(name)
+	if cleanedName != "" {
+		return cleanedName
+	}
+	if at := strings.IndexByte(email, '@'); at > 0 {
+		return email[:at]
+	}
+	return email
 }
 
 // List returns persisted users, newest first.
