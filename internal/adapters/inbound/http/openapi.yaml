@@ -429,7 +429,9 @@ paths:
         structure from free-form text.
 
         Instances that have no trace provider configured return `404` with
-        `code=not_found` so clients can disable the feature gracefully.
+        `code=provider_not_configured`. Analyses that completed without a
+        persisted trace reference return `404` with `code=trace_not_found`;
+        clients should explain that a new analysis with trace signals is needed.
       responses:
         "200":
           description: Structured trace insights for the analysis.
@@ -516,6 +518,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WrapperDtoResponde_ChatResponseDto"
+              examples:
+                out-of-scope:
+                  summary: Friendly refusal for a question unrelated to the analysis.
+                  value:
+                    data:
+                      analysisId: analysis-123
+                      answer: I can only answer questions about the active ObservAI analysis. Ask about the evidence, hypotheses, affected services or recommended investigation steps.
+                      evidence: []
+                    metadata:
+                      requestId: 0d4f9c43-1f8e-4f02-9b76-37c12f12d8b4
+                      processingTimeMs: 3
+                      provider: { mode: local }
             text/event-stream:
               schema:
                 type: string
@@ -524,22 +538,11 @@ paths:
                   the type (`token`, `evidence_cited`, `done`, `error`) and a
                   JSON-encoded `data:` line whose shape depends on the type.
         "400":
-          description: Invalid question or out-of-scope.
+          description: Invalid question payload.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
-              examples:
-                out-of-scope:
-                  summary: Question is unrelated to the analysis.
-                  value:
-                    data:
-                      code: question_out_of_scope
-                      message: I can only answer questions about the active ObservAI analysis. Ask about the evidence, hypotheses, affected services or recommended investigation steps.
-                    metadata:
-                      requestId: 0d4f9c43-1f8e-4f02-9b76-37c12f12d8b4
-                      processingTimeMs: 3
-                      provider: { mode: local }
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -579,10 +582,23 @@ paths:
   /v1/setup/admin:
     post:
       tags: [setup]
-      summary: Bootstrap the initial admin user. Rejected once any user exists.
+      summary: Create an admin while setup is open, or issue a session for an existing admin.
       operationId: bootstrapAdmin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BootstrapAdminRequestDto"
       responses:
-        "201": { description: Initial admin created. }
+        "200":
+          description: Existing admin credentials accepted and session issued.
+        "201":
+          description: Admin created and session issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_SessionResponseDto"
         "409": { description: Setup already completed. }
 
   /v1/auth/login:
@@ -620,7 +636,7 @@ paths:
         "200": { description: User profile. }
     patch:
       tags: [profile]
-      summary: Update the authenticated user's email.
+      summary: Update the authenticated user's profile.
       operationId: updateMe
       responses:
         "200": { description: Updated profile. }
@@ -990,10 +1006,11 @@ components:
               value:
                 data:
                   code: invalid_json
-                  message: request body contains unknown field
+                  message: Remove unsupported field "severity" from the request and try again.
                   details:
                     - field: severity
                       rule: unknown_field
+                      message: This field is not accepted by this endpoint.
                 metadata:
                   requestId: a1
                   processingTimeMs: 1
@@ -1002,10 +1019,11 @@ components:
               value:
                 data:
                   code: invalid_request
-                  message: request validation failed
+                  message: Some submitted fields are invalid. Review the highlighted fields and try again.
                   details:
                     - field: goal
                       rule: required
+                      message: This field is required.
                 metadata:
                   requestId: a2
                   processingTimeMs: 1
@@ -1171,20 +1189,20 @@ components:
           description: |
             Machine-readable error code. Stable values:
             `invalid_analysis_request`, `invalid_analysis_filter`,
-            `invalid_chat_question`, `question_out_of_scope`, `invalid_json`,
+            `invalid_chat_question`, `invalid_json`,
             `invalid_request`, `analysis_not_found`,
-            `analysis_context_not_found`, `request_body_too_large`,
+            `analysis_context_not_found`, `trace_not_found`, `request_body_too_large`,
             `request_canceled`, `request_timeout`, `provider_auth_failed`,
-            `internal_error`.
+            `feature_not_configured`, `internal_error`.
           enum:
             - invalid_analysis_request
             - invalid_analysis_filter
             - invalid_chat_question
-            - question_out_of_scope
             - invalid_json
             - invalid_request
             - analysis_not_found
             - analysis_context_not_found
+            - trace_not_found
             - analysis_job_not_found
             - chat_message_not_found
             - invalid_export_format
@@ -1193,7 +1211,12 @@ components:
             - request_body_too_large
             - request_canceled
             - request_timeout
+            - unauthorized
+            - forbidden
+            - csrf_token_invalid
             - provider_auth_failed
+            - provider_not_configured
+            - feature_not_configured
             - webhook_not_found
             - webhook_delivery_not_found
             - not_found
@@ -1790,9 +1813,10 @@ components:
 
     UserResponseDto:
       type: object
-      required: [id, email, role, isActive, mustChangePassword, preferences, createdAt, updatedAt]
+      required: [id, name, email, role, isActive, mustChangePassword, preferences, createdAt, updatedAt]
       properties:
         id: { type: string }
+        name: { type: string }
         email: { type: string, format: email }
         role: { type: string, enum: [admin, operator, viewer] }
         isActive: { type: boolean }
@@ -1801,8 +1825,14 @@ components:
           description: Frontend must force a password-change flow before normal use when true.
         preferences:
           $ref: "#/components/schemas/PreferencesDto"
-        createdAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time }
+        createdAt:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp formatted in the configured instance timezone.
+        updatedAt:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp formatted in the configured instance timezone.
         lastLoginAt: { type: string, format: date-time, nullable: true }
     UpdatePreferencesRequestDto:
       type: object
@@ -1850,13 +1880,24 @@ components:
         user:
           $ref: "#/components/schemas/UserResponseDto"
         csrfToken: { type: string }
-        expiresAt: { type: string, format: date-time }
+        expiresAt:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp formatted in the configured instance timezone.
     WrapperDtoResponde_UserResponseDto:
       type: object
       required: [data, metadata]
       properties:
         data:
           $ref: "#/components/schemas/UserResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
+    WrapperDtoResponde_SessionResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/SessionResponseDto"
         metadata:
           $ref: "#/components/schemas/ResponseMetadata"
     WrapperDtoResponde_PreferencesDto:
@@ -1883,15 +1924,6 @@ components:
           $ref: "#/components/schemas/MyKeysResponseDto"
         metadata:
           $ref: "#/components/schemas/ResponseMetadata"
-    WrapperDtoResponde_SessionResponseDto:
-      type: object
-      required: [data, metadata]
-      properties:
-        data:
-          $ref: "#/components/schemas/SessionResponseDto"
-        metadata:
-          $ref: "#/components/schemas/ResponseMetadata"
-
     # ---- Setup ---------------------------------------------------------------
 
     SetupStatusResponseDto:
@@ -1903,6 +1935,13 @@ components:
         observabilityConfigured: { type: boolean }
         setupCompleted: { type: boolean }
         state: { type: string, enum: [pending, completed, degraded] }
+    BootstrapAdminRequestDto:
+      type: object
+      required: [email, password]
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 8 }
     WrapperDtoResponde_SetupStatusResponseDto:
       type: object
       required: [data, metadata]

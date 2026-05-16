@@ -202,6 +202,47 @@ func mergeDBLLMIntoConfig(cfg config.Config, active *domain.LLMConfig, plaintext
 	return merged
 }
 
+func initialRuntimeProviderConfig(ctx context.Context, cfg config.Config, log *slog.Logger, providerConfigs *usecase.ProviderConfig, llmConfigs *usecase.LLMConfig) (config.Config, bool) {
+	runtimeConfig, observabilityLoaded := initialObservabilityProviderConfig(ctx, cfg, log, providerConfigs)
+	runtimeConfig, llmLoaded := initialLLMProviderConfig(ctx, runtimeConfig, log, llmConfigs)
+	return runtimeConfig, observabilityLoaded || llmLoaded
+}
+
+func initialObservabilityProviderConfig(ctx context.Context, cfg config.Config, log *slog.Logger, providerConfigs *usecase.ProviderConfig) (config.Config, bool) {
+	if providerConfigs == nil {
+		return cfg, false
+	}
+	activeConfigs, err := providerConfigs.ListActiveConfigs(ctx)
+	if err != nil {
+		log.Warn("load active provider configurations failed", "error", err)
+		return cfg, false
+	}
+	if len(activeConfigs) == 0 {
+		return cfg, false
+	}
+	return mergeDBProvidersIntoConfig(cfg, activeConfigs, providerConfigs.DecryptCredentials), true
+}
+
+func initialLLMProviderConfig(ctx context.Context, cfg config.Config, log *slog.Logger, llmConfigs *usecase.LLMConfig) (config.Config, bool) {
+	if llmConfigs == nil {
+		return cfg, false
+	}
+	active, err := llmConfigs.FindActiveConfig(ctx)
+	if errors.Is(err, domain.ErrLLMConfigNotFound) {
+		return cfg, false
+	}
+	if err != nil {
+		log.Warn("load active llm provider configuration failed", "error", err)
+		return cfg, false
+	}
+	plaintextAPIKey, err := llmConfigs.DecryptAPIKey(active)
+	if err != nil {
+		log.Warn("decrypt active llm provider api key failed", "error", err)
+		return cfg, false
+	}
+	return mergeDBLLMIntoConfig(cfg, &active, plaintextAPIKey), true
+}
+
 func applyProviderCredentials(options map[string]string, providerType domain.ObservabilityProviderType, credentials string) {
 	if options == nil || credentials == "" {
 		return
@@ -256,7 +297,7 @@ func factoryDependencies(cfg config.Config, log *slog.Logger, observer observabi
 // Failures are logged at warn level and never propagated so a bad
 // provider configuration cannot wedge the API; the previous adapter set
 // stays in use until the operator fixes the configuration.
-func newAdapterReloader(cfg config.Config, log *slog.Logger, deps factory.Dependencies, registries adapterRegistries, providerConfigs *usecase.ProviderConfig, llmConfigs *usecase.LLMConfig) usecase.ReloadHook {
+func newAdapterReloader(cfg config.Config, log *slog.Logger, deps factory.Dependencies, registries adapterRegistries, capabilities *capabilitiesStore, providerConfigs *usecase.ProviderConfig, llmConfigs *usecase.LLMConfig) usecase.ReloadHook {
 	return func(ctx context.Context) {
 		if providerConfigs != nil {
 			dbConfigs, err := providerConfigs.ListActiveConfigs(ctx)
@@ -268,6 +309,11 @@ func newAdapterReloader(cfg config.Config, log *slog.Logger, deps factory.Depend
 					log.Warn("reload: build observability failed", "error", err)
 				} else {
 					registries.collector.Set(result.Collector)
+					if capabilities != nil {
+						snapshot := capabilities.Get()
+						snapshot.Observability = toCapabilityProviders(toObservabilityProviders(result.Capabilities))
+						capabilities.Set(snapshot)
+					}
 					if trace, err := factory.BuildTraceProvider(merged, deps); err != nil {
 						log.Warn("reload: build trace provider failed", "error", err)
 					} else if trace.Provider != nil {
@@ -289,6 +335,12 @@ func newAdapterReloader(cfg config.Config, log *slog.Logger, deps factory.Depend
 					}
 					if result.Responder != nil {
 						registries.responder.Set(result.Responder)
+					}
+					if capabilities != nil {
+						snapshot := capabilities.Get()
+						snapshot.LLM.Provider = result.Provider
+						snapshot.LLM.Model = result.Model
+						capabilities.Set(snapshot)
 					}
 				}
 			}

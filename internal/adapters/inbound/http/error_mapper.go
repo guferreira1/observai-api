@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"errors"
+	"fmt"
 	stdhttp "net/http"
 	"strings"
 
@@ -17,12 +18,30 @@ type httpErrorResponse struct {
 	code    string
 	message string
 	details []ErrorFieldDetail
+	cause   string
 }
 
 type domainErrorRule struct {
 	match    func(error) bool
 	build    func(error) httpErrorResponse
 	response httpErrorResponse
+}
+
+type validationMessageBuilder func(validator.FieldError) string
+
+var validationMessageBuilders = map[string]validationMessageBuilder{
+	"required": func(_ validator.FieldError) string {
+		return "This field is required."
+	},
+	"email": func(_ validator.FieldError) string {
+		return "Enter a valid email address."
+	},
+	"min": func(validationError validator.FieldError) string {
+		return fmt.Sprintf("Must be at least %s characters.", validationError.Param())
+	},
+	"oneof": func(validationError validator.FieldError) string {
+		return "Use one of: " + strings.ReplaceAll(validationError.Param(), " ", ", ") + "."
+	},
 }
 
 var domainErrorRules = []domainErrorRule{
@@ -66,14 +85,6 @@ var domainErrorRules = []domainErrorRule{
 		},
 	},
 	{
-		match: func(err error) bool { return errors.Is(err, domain.ErrQuestionOutOfScope) },
-		response: httpErrorResponse{
-			status:  stdhttp.StatusBadRequest,
-			code:    "question_out_of_scope",
-			message: "I can only answer questions about the active ObservAI analysis. Ask about the evidence, hypotheses, affected services or recommended investigation steps.",
-		},
-	},
-	{
 		match: func(err error) bool { return errors.Is(err, domain.ErrAnalysisNotFound) },
 		response: httpErrorResponse{
 			status:  stdhttp.StatusNotFound,
@@ -87,6 +98,14 @@ var domainErrorRules = []domainErrorRule{
 			status:  stdhttp.StatusNotFound,
 			code:    "analysis_context_not_found",
 			message: "analysis context not found",
+		},
+	},
+	{
+		match: func(err error) bool { return errors.Is(err, domain.ErrTraceNotFound) },
+		response: httpErrorResponse{
+			status:  stdhttp.StatusNotFound,
+			code:    "trace_not_found",
+			message: "analysis does not contain a trace reference",
 		},
 	},
 	{
@@ -137,11 +156,19 @@ var domainErrorRules = []domainErrorRule{
 		build: func(err error) httpErrorResponse {
 			var unknownField errRequestBodyUnknownField
 			_ = errors.As(err, &unknownField)
+			message := "The request includes an unsupported field. Remove it and try again."
+			if unknownField.Field != "" {
+				message = fmt.Sprintf("Remove unsupported field %q from the request and try again.", unknownField.Field)
+			}
 			return httpErrorResponse{
 				status:  stdhttp.StatusBadRequest,
 				code:    "invalid_json",
-				message: "request body contains unknown field",
-				details: []ErrorFieldDetail{{Field: unknownField.Field, Rule: "unknown_field"}},
+				message: message,
+				details: []ErrorFieldDetail{{
+					Field:   unknownField.Field,
+					Rule:    "unknown_field",
+					Message: "This field is not accepted by this endpoint.",
+				}},
 			}
 		},
 	},
@@ -204,24 +231,27 @@ func mapHTTPError(err error) httpErrorResponse {
 
 	var validationErrors validator.ValidationErrors
 	if errors.As(err, &validationErrors) {
-		return validationErrorResponse(validationErrors)
+		return withErrorCause(validationErrorResponse(validationErrors), err)
 	}
 
 	for _, rule := range domainErrorRules {
 		if !rule.match(err) {
 			continue
 		}
+		var response httpErrorResponse
 		if rule.build != nil {
-			return rule.build(err)
+			response = rule.build(err)
+		} else {
+			response = rule.response
 		}
-		return rule.response
+		return withErrorCause(response, err)
 	}
 
-	return httpErrorResponse{
+	return withErrorCause(httpErrorResponse{
 		status:  stdhttp.StatusInternalServerError,
 		code:    "internal_error",
 		message: "internal server error",
-	}
+	}, err)
 }
 
 func validationErrorResponse(validationErrors validator.ValidationErrors) httpErrorResponse {
@@ -230,16 +260,23 @@ func validationErrorResponse(validationErrors validator.ValidationErrors) httpEr
 		details = append(details, ErrorFieldDetail{
 			Field:   fieldPath(validationError),
 			Rule:    validationError.Tag(),
-			Message: validationError.Param(),
+			Message: validationErrorMessage(validationError),
 		})
 	}
 
 	return httpErrorResponse{
 		status:  stdhttp.StatusBadRequest,
 		code:    "invalid_request",
-		message: "request validation failed",
+		message: "Some submitted fields are invalid. Review the highlighted fields and try again.",
 		details: details,
 	}
+}
+
+func validationErrorMessage(validationError validator.FieldError) string {
+	if buildMessage, ok := validationMessageBuilders[validationError.Tag()]; ok {
+		return buildMessage(validationError)
+	}
+	return "Review this field and try again."
 }
 
 func fieldPath(err validator.FieldError) string {
@@ -260,4 +297,11 @@ func extractReason(err error, base error, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+func withErrorCause(response httpErrorResponse, err error) httpErrorResponse {
+	if err != nil {
+		response.cause = SanitizeExternalMessage(err.Error())
+	}
+	return response
 }

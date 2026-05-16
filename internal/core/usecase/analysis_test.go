@@ -38,12 +38,14 @@ func TestAnalysisAnalyze(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "analysis-000001", result.ID)
+	assert.Equal(t, "trace-checkout-service", result.TraceID)
 	assert.Equal(t, domain.SeverityHigh, result.Severity)
 	assert.Len(t, result.Evidence, 3)
 
 	stored, err := repository.Find(ctx, result.ID)
 	require.NoError(t, err)
 	assert.Equal(t, result.Summary, stored.Summary)
+	assert.Equal(t, result.TraceID, stored.TraceID)
 }
 
 func TestAnalysisAnalyzeRejectsInvalidRequest(t *testing.T) {

@@ -76,12 +76,19 @@ func TestSetupStatusReportsCompletedWhenEverythingIsConfigured(t *testing.T) {
 
 func TestSetupBootstrapAdminCreatesAdminUser(t *testing.T) {
 	setup, users := newSetupFixture(t, stubInventory{})
-	user, err := setup.BootstrapAdmin(context.Background(), "admin@observai.io", "CorrectHorse42")
+	user, err := setup.BootstrapAdminWithOptions(context.Background(), BootstrapAdminRequest{
+		Name:     "Gustavo Ferreira",
+		Email:    "admin@observai.io",
+		Password: "CorrectHorse42",
+	})
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	if user.Role != domain.RoleAdmin || !user.IsActive {
 		t.Fatalf("unexpected admin user: %+v", user)
+	}
+	if user.Name != "Gustavo Ferreira" {
+		t.Fatalf("expected admin name persisted, got %q", user.Name)
 	}
 	count, _ := users.Count(context.Background())
 	if count != 1 {
@@ -89,8 +96,22 @@ func TestSetupBootstrapAdminCreatesAdminUser(t *testing.T) {
 	}
 }
 
-func TestSetupBootstrapAdminRejectsSecondInvocation(t *testing.T) {
+func TestSetupBootstrapAdminAllowsAdditionalAdminWhileSetupIsOpen(t *testing.T) {
 	setup, _ := newSetupFixture(t, stubInventory{})
+	if _, err := setup.BootstrapAdmin(context.Background(), "admin@observai.io", "CorrectHorse42"); err != nil {
+		t.Fatalf("first bootstrap: %v", err)
+	}
+	user, err := setup.BootstrapAdmin(context.Background(), "another@observai.io", "AnotherP@ss1")
+	if err != nil {
+		t.Fatalf("second bootstrap: %v", err)
+	}
+	if user.Email != "another@observai.io" || user.Role != domain.RoleAdmin {
+		t.Fatalf("unexpected second admin: %+v", user)
+	}
+}
+
+func TestSetupBootstrapAdminRejectsWhenSetupCompleted(t *testing.T) {
+	setup, _ := newSetupFixture(t, stubInventory{observability: 1, llm: 1})
 	if _, err := setup.BootstrapAdmin(context.Background(), "admin@observai.io", "CorrectHorse42"); err != nil {
 		t.Fatalf("first bootstrap: %v", err)
 	}

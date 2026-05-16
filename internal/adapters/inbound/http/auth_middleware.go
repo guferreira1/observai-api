@@ -144,8 +144,9 @@ const CSRFCookieName = "oai_csrf"
 // The middleware tries credentials in order: JWT cookie first (when a
 // signer and user repository are configured), then static API keys, then
 // persisted API keys. Operational endpoints listed in Skip bypass
-// authentication entirely. When no credential source is configured the
-// middleware is a no-op so local development runs without secrets.
+// authentication entirely. When no credential source is configured, local
+// development receives an anonymous non-admin principal that can use analysis
+// and chat routes without unlocking administrative endpoints.
 func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(stdhttp.Handler) stdhttp.Handler {
 	staticKeys := indexKeys(config.StaticKeys)
 	adminKeys := indexKeys(config.AdminKeys)
@@ -158,12 +159,17 @@ func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(st
 	openPrincipal := AuthPrincipal{
 		Source: AuthSourceAPIKey,
 		Name:   "anonymous",
-		Scopes: domain.AllAPIKeyScopes(),
+		Scopes: []domain.APIKeyScope{
+			domain.APIKeyScopeAnalysisRead,
+			domain.APIKeyScopeAnalysisWrite,
+			domain.APIKeyScopeChatWrite,
+		},
 	}
 
 	return func(next stdhttp.Handler) stdhttp.Handler {
 		return stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			if authDisabled {
+				recordPrincipal(writer, openPrincipal)
 				next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), openPrincipal)))
 				return
 			}
@@ -174,6 +180,7 @@ func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(st
 
 			if cookieEnabled {
 				if principal, ok := resolveCookie(request, config.Signer, config.Users); ok {
+					recordPrincipal(writer, principal)
 					next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), principal)))
 					return
 				}
@@ -208,6 +215,7 @@ func authMiddleware(config AuthConfig, provider providerSummaryProvider) func(st
 					writeUnauthorized(writer, request, provider)
 					return
 				}
+				recordPrincipal(writer, principal)
 				next.ServeHTTP(writer, request.WithContext(withPrincipal(request.Context(), principal)))
 				return
 			}
@@ -262,7 +270,7 @@ func RequireRole(roles ...domain.Role) func(stdhttp.HandlerFunc) stdhttp.Handler
 		return func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			principal, ok := PrincipalFromContext(request.Context())
 			if !ok || !allowed[principal.EffectiveRole()] {
-				writeForbidden(writer, request, nil)
+				writeRoleForbidden(writer, request, nil, roles)
 				return
 			}
 			next(writer, request)
@@ -277,12 +285,12 @@ func RequireScope(scopes ...domain.APIKeyScope) func(stdhttp.HandlerFunc) stdhtt
 		return func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			principal, ok := PrincipalFromContext(request.Context())
 			if !ok {
-				writeForbidden(writer, request, nil)
+				writeScopeForbidden(writer, request, nil, scopes)
 				return
 			}
 			for _, scope := range scopes {
 				if !principal.HasScope(scope) {
-					writeForbidden(writer, request, nil)
+					writeScopeForbidden(writer, request, nil, scopes)
 					return
 				}
 			}
@@ -363,20 +371,45 @@ func shouldSkipAuthentication(requestPath string, exactSkipPaths map[string]bool
 }
 
 func writeUnauthorized(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider) {
-	writeAuthFailure(writer, request, provider, stdhttp.StatusUnauthorized, "unauthorized", "missing or invalid credentials")
+	writeAuthFailure(writer, request, provider, stdhttp.StatusUnauthorized, "unauthorized", "missing or invalid credentials", "http.auth", nil)
 }
 
-func writeForbidden(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider) {
-	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges")
+func writeRoleForbidden(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, roles []domain.Role) {
+	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges", "http.authorization", []ErrorFieldDetail{{
+		Field:   "role",
+		Rule:    "required_role",
+		Message: "Requires one of: " + roleList(roles) + ".",
+	}})
 }
 
-func writeAuthFailure(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, status int, code, message string) {
-	requestID := ""
-	if request != nil {
-		requestID = requestIDFromContext(request.Context())
-	}
-	writeMiddlewareErrorResponse(writer, requestID, status, "", ErrorResponse{
+func writeScopeForbidden(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, scopes []domain.APIKeyScope) {
+	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges", "http.authorization", []ErrorFieldDetail{{
+		Field:   "scope",
+		Rule:    "required_scope",
+		Message: "Requires all of: " + scopeList(scopes) + ".",
+	}})
+}
+
+func writeAuthFailure(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, status int, code, message string, source string, details []ErrorFieldDetail) {
+	writeMiddlewareErrorResponse(writer, request, status, "", source, ErrorResponse{
 		Code:    code,
 		Message: message,
+		Details: details,
 	}, middlewareProviderSummary(provider))
+}
+
+func roleList(roles []domain.Role) string {
+	values := make([]string, 0, len(roles))
+	for _, role := range roles {
+		values = append(values, string(role))
+	}
+	return strings.Join(values, ", ")
+}
+
+func scopeList(scopes []domain.APIKeyScope) string {
+	values := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		values = append(values, string(scope))
+	}
+	return strings.Join(values, ", ")
 }

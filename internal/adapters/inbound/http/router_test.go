@@ -13,7 +13,9 @@ import (
 
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/testfakes"
+	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
+	"github.com/guferreira1/observai-api/internal/platform/crypto"
 	"github.com/guferreira1/observai-api/internal/platform/health"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -282,13 +284,15 @@ func TestRouterReturnsValidationDetailsOnPayloadFailure(t *testing.T) {
 	var payload WrapperDtoResponde[ErrorResponse]
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
 	assert.Equal(t, "invalid_request", payload.Data.Code)
+	assert.Equal(t, "Some submitted fields are invalid. Review the highlighted fields and try again.", payload.Data.Message)
 	require.NotEmpty(t, payload.Data.Details)
 
 	missingGoal := false
 	for _, detail := range payload.Data.Details {
-		if detail.Field == "Goal" || detail.Field == "goal" {
+		if detail.Field == "goal" {
 			missingGoal = true
 			assert.Equal(t, "required", detail.Rule)
+			assert.Equal(t, "This field is required.", detail.Message)
 		}
 	}
 	assert.True(t, missingGoal, "expected goal field to be reported as required")
@@ -364,8 +368,155 @@ func TestRouterRejectsBodyWithUnknownFields(t *testing.T) {
 	var payload WrapperDtoResponde[ErrorResponse]
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
 	assert.Equal(t, "invalid_json", payload.Data.Code)
+	assert.Equal(t, `Remove unsupported field "unexpectedField" from the request and try again.`, payload.Data.Message)
 	require.NotEmpty(t, payload.Data.Details)
+	assert.Equal(t, "unexpectedField", payload.Data.Details[0].Field)
 	assert.Equal(t, "unknown_field", payload.Data.Details[0].Rule)
+	assert.Equal(t, "This field is not accepted by this endpoint.", payload.Data.Details[0].Message)
+}
+
+func TestRouterLogsSetupAdminUnknownField(t *testing.T) {
+	t.Parallel()
+
+	var logBuffer bytes.Buffer
+	userRepository := inmemory.NewUserRepository()
+	setup := usecase.NewSetup(
+		userRepository,
+		usecase.NewUser(userRepository, nil, testfakes.NewIDGenerator("user")),
+		nil,
+	)
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(&logBuffer, nil)),
+		RequestTimeout: 5 * time.Second,
+		Setup:          setup,
+	})
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42",
+		"confirmPassword": "CorrectHorse42"
+	}`))
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "invalid_json", payload.Data.Code)
+	assert.Equal(t, `Remove unsupported field "confirmPassword" from the request and try again.`, payload.Data.Message)
+	assert.Contains(t, logBuffer.String(), "http error")
+	assert.Contains(t, logBuffer.String(), "invalid_json")
+	assert.Contains(t, logBuffer.String(), "confirmPassword")
+}
+
+func TestRouterBootstrapAdminAcceptsName(t *testing.T) {
+	t.Parallel()
+
+	router := newSetupAuthTestRouter(t)
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusCreated, response.Code)
+	assert.NotEmpty(t, response.Header().Values("Set-Cookie"))
+	var payload WrapperDtoResponde[SessionResponseDto]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "Gustavo Ferreira", payload.Data.User.Name)
+	assert.Equal(t, "admin@observai.io", payload.Data.User.Email)
+	assert.NotEmpty(t, payload.Data.CSRFToken)
+	assert.NotEmpty(t, payload.Data.ExpiresAt)
+}
+
+func TestRouterBootstrapAdminAllowsSecondAdminWhileSetupOpen(t *testing.T) {
+	t.Parallel()
+
+	router := newSetupAuthTestRouter(t)
+	firstRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	firstResponse := httptest.NewRecorder()
+	router.ServeHTTP(firstResponse, firstRequest)
+	require.Equal(t, stdhttp.StatusCreated, firstResponse.Code)
+
+	secondRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Second Admin",
+		"email": "second@observai.io",
+		"password": "AnotherP@ss1"
+	}`))
+	secondResponse := httptest.NewRecorder()
+	router.ServeHTTP(secondResponse, secondRequest)
+
+	require.Equal(t, stdhttp.StatusCreated, secondResponse.Code)
+	var payload WrapperDtoResponde[SessionResponseDto]
+	require.NoError(t, json.Unmarshal(secondResponse.Body.Bytes(), &payload))
+	assert.Equal(t, "Second Admin", payload.Data.User.Name)
+	assert.Equal(t, "second@observai.io", payload.Data.User.Email)
+}
+
+func TestRouterBootstrapAdminExistingAdminCredentialsIssueSession(t *testing.T) {
+	t.Parallel()
+
+	router := newSetupAuthTestRouter(t)
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusCreated, createResponse.Code)
+
+	retryRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	retryResponse := httptest.NewRecorder()
+	router.ServeHTTP(retryResponse, retryRequest)
+
+	require.Equal(t, stdhttp.StatusOK, retryResponse.Code)
+	var payload WrapperDtoResponde[SessionResponseDto]
+	require.NoError(t, json.Unmarshal(retryResponse.Body.Bytes(), &payload))
+	assert.Equal(t, "admin@observai.io", payload.Data.User.Email)
+	assert.NotEmpty(t, payload.Data.CSRFToken)
+}
+
+func TestRouterFormatsBootstrapAdminTimestampsInConfiguredTimezone(t *testing.T) {
+	t.Parallel()
+
+	userRepository := inmemory.NewUserRepository()
+	setup := usecase.NewSetup(
+		userRepository,
+		usecase.NewUser(userRepository, nil, testfakes.NewIDGenerator("user")),
+		nil,
+	)
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: 5 * time.Second,
+		Setup:          setup,
+		TimeLocation:   time.FixedZone("America/Sao_Paulo", -3*60*60),
+	})
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusCreated, response.Code)
+	var payload WrapperDtoResponde[UserResponseDto]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Contains(t, payload.Data.CreatedAt, "-03:00")
+	assert.Contains(t, payload.Data.UpdatedAt, "-03:00")
 }
 
 func TestRouterReturnsNotFoundForMissingAnalysis(t *testing.T) {
@@ -384,10 +535,19 @@ func TestRouterReturnsNotFoundForMissingAnalysis(t *testing.T) {
 	assert.Equal(t, "analysis_not_found", payload.Data.Code)
 }
 
-func TestRouterRejectsOutOfScopeChatQuestion(t *testing.T) {
+func TestRouterAnswersOutOfScopeChatQuestion(t *testing.T) {
 	t.Parallel()
 
 	router := newTestRouter()
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"]
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
+
 	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses/analysis-000001/chat", bytes.NewBufferString(`{
 		"question": "What is the capital of France?"
 	}`))
@@ -395,11 +555,40 @@ func TestRouterRejectsOutOfScopeChatQuestion(t *testing.T) {
 
 	router.ServeHTTP(response, request)
 
-	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
+	require.Equal(t, stdhttp.StatusOK, response.Code)
 
-	var payload WrapperDtoResponde[ErrorResponse]
+	var payload WrapperDtoResponde[ChatResponseDto]
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
-	assert.Equal(t, "question_out_of_scope", payload.Data.Code)
+	assert.Equal(t, "analysis-000001", payload.Data.AnalysisID)
+	assert.Contains(t, payload.Data.Answer, "I can only answer questions about the active ObservAI analysis")
+	assert.Empty(t, payload.Data.Evidence)
+}
+
+func TestRouterAcceptsContextualChatFollowUp(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"]
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
+
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses/analysis-000001/chat", bytes.NewBufferString(`{
+		"question": "E agora?"
+	}`))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusOK, response.Code)
+
+	var payload WrapperDtoResponde[ChatResponseDto]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "analysis-000001", payload.Data.AnalysisID)
+	assert.NotEmpty(t, payload.Data.Answer)
 }
 
 func TestRouterReturnsPersistedChatHistory(t *testing.T) {
@@ -532,16 +721,17 @@ func TestRouterRejectsUnknownExportFormat(t *testing.T) {
 func TestRouterReturnsTraceInsights(t *testing.T) {
 	t.Parallel()
 
-	router := newTestRouter()
-
-	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
-		"goal": "investigate checkout latency",
-		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
-		"affectedServices": ["checkout-service"]
-	}`))
-	createResponse := httptest.NewRecorder()
-	router.ServeHTTP(createResponse, createRequest)
-	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
+	repository := inmemory.NewAnalysisRepository()
+	require.NoError(t, repository.Save(context.Background(), domain.AnalysisResult{
+		ID:      "analysis-000001",
+		TraceID: "trace-000001",
+	}))
+	traces := usecase.NewTrace(repository, testfakes.NewTraceProvider())
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: 5 * time.Second,
+		Trace:          traces,
+	})
 
 	tracesRequest := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses/analysis-000001/traces", nil)
 	tracesResponse := httptest.NewRecorder()
@@ -555,6 +745,29 @@ func TestRouterReturnsTraceInsights(t *testing.T) {
 	require.NotEmpty(t, payload.Data.SlowestSpanIDs)
 	assert.Equal(t, "span-root", payload.Data.CriticalPathSpanIDs[0])
 	assert.NotEmpty(t, payload.Data.DependencyEdges)
+}
+
+func TestRouterReturnsTraceNotFoundWhenAnalysisHasNoTraceReference(t *testing.T) {
+	t.Parallel()
+
+	repository := inmemory.NewAnalysisRepository()
+	require.NoError(t, repository.Save(context.Background(), domain.AnalysisResult{ID: "analysis-000001"}))
+	traces := usecase.NewTrace(repository, testfakes.NewTraceProvider())
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: 5 * time.Second,
+		Trace:          traces,
+	})
+
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/analyses/analysis-000001/traces", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, stdhttp.StatusNotFound, response.Code)
+
+	var payload WrapperDtoResponde[ErrorResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "trace_not_found", payload.Data.Code)
+	assert.Equal(t, "analysis does not contain a trace reference", payload.Data.Message)
 }
 
 func TestRouterCancelAnalysisJobMarksCanceled(t *testing.T) {
@@ -685,6 +898,45 @@ func TestRouterExposesCapabilities(t *testing.T) {
 	assert.Equal(t, "fake", payload.Metadata.Provider.LLM)
 }
 
+func TestRouterExposesDynamicCapabilities(t *testing.T) {
+	t.Parallel()
+
+	capabilities := CapabilitiesResponse{
+		Mode:    "local",
+		Version: "test",
+		LLM:     CapabilityLLM{Provider: "ChatGPT", Model: "gpt-4o-mini"},
+		Observability: []CapabilityProvider{
+			{Provider: "Prometheus", Signals: []string{"metrics"}},
+			{Provider: "Jaeger", Signals: []string{"traces"}},
+		},
+	}
+	provider := ProviderSummary{
+		Mode:          "local",
+		LLM:           "ChatGPT",
+		Observability: []string{"Prometheus", "Jaeger"},
+	}
+
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout:   5 * time.Second,
+		CapabilitiesFunc: func() CapabilitiesResponse { return capabilities },
+		ProviderFunc:     func() ProviderSummary { return provider },
+	})
+
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/capabilities", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, stdhttp.StatusOK, response.Code)
+
+	var payload WrapperDtoResponde[CapabilitiesResponse]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "ChatGPT", payload.Data.LLM.Provider)
+	require.Len(t, payload.Data.Observability, 2)
+	assert.Equal(t, "Jaeger", payload.Data.Observability[1].Provider)
+	assert.Equal(t, "ChatGPT", payload.Metadata.Provider.LLM)
+	assert.Equal(t, []string{"Prometheus", "Jaeger"}, payload.Metadata.Provider.Observability)
+}
+
 func TestRouterHealthzAndReadyzUseEnvelope(t *testing.T) {
 	t.Parallel()
 
@@ -722,6 +974,42 @@ func TestRouterHealthzAndReadyzUseEnvelope(t *testing.T) {
 	assert.Equal(t, "database", readyPayload.Data.Checks[0].Name)
 	assert.Equal(t, "redis", readyPayload.Data.Checks[1].Name)
 	assert.NotEmpty(t, readyPayload.Metadata.RequestID)
+}
+
+func TestRouterReportsDisabledOptionalRoutes(t *testing.T) {
+	t.Parallel()
+
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{stdhttp.MethodGet, "/v1/setup/status"},
+		{stdhttp.MethodPost, "/v1/auth/login"},
+		{stdhttp.MethodGet, "/v1/me"},
+		{stdhttp.MethodGet, "/v1/admin/users"},
+		{stdhttp.MethodGet, "/v1/admin/providers"},
+		{stdhttp.MethodGet, "/v1/admin/llm-providers"},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.method+" "+testCase.path, func(t *testing.T) {
+			request := httptest.NewRequest(testCase.method, testCase.path, nil)
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			require.Equal(t, stdhttp.StatusServiceUnavailable, response.Code)
+
+			var payload WrapperDtoResponde[ErrorResponse]
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+			assert.Equal(t, "feature_not_configured", payload.Data.Code)
+			assert.NotEmpty(t, payload.Metadata.RequestID)
+		})
+	}
 }
 
 func TestRouterAcceptsTelemetry(t *testing.T) {
@@ -809,6 +1097,29 @@ func TestRateLimitMiddlewareUsesConfiguredProviderSummary(t *testing.T) {
 func newTestRouter() stdhttp.Handler {
 	router, _ := newTestRouterWithBackend()
 	return router
+}
+
+func newSetupAuthTestRouter(t *testing.T) stdhttp.Handler {
+	t.Helper()
+
+	userRepository := inmemory.NewUserRepository()
+	refreshRepository := inmemory.NewRefreshTokenRepository()
+	signer, err := crypto.NewJWTSigner(bytes.Repeat([]byte{0xab}, crypto.MinJWTSecretLength), "observai-api")
+	require.NoError(t, err)
+
+	userAdmin := usecase.NewUser(userRepository, refreshRepository, testfakes.NewIDGenerator("user"))
+	setup := usecase.NewSetup(userRepository, userAdmin, nil)
+	sessions := usecase.NewAuth(userRepository, refreshRepository, signer, testfakes.NewIDGenerator("session"), usecase.AuthOptions{
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: time.Hour,
+	})
+
+	return NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: 5 * time.Second,
+		Setup:          setup,
+		Sessions:       sessions,
+	})
 }
 
 func newTestRouterWithBackend() (stdhttp.Handler, *inmemory.AnalysisJobRepository) {

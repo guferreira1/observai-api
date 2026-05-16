@@ -49,13 +49,16 @@ func loggerMiddleware(base *slog.Logger) func(stdhttp.Handler) stdhttp.Handler {
 			recorder := &statusRecorder{ResponseWriter: writer, status: stdhttp.StatusOK}
 			next.ServeHTTP(recorder, request)
 
-			logger.FromContext(request.Context()).LogAttrs(request.Context(), slog.LevelInfo, "http request",
-				slog.String("method", request.Method),
-				slog.String("path", routePattern(request)),
-				slog.Int("status", recorder.status),
-				slog.Int64("durationMs", time.Since(startedAt).Milliseconds()),
-				slog.String("remote", remoteAddr(request)),
+			duration := time.Since(startedAt)
+			requestLogger := logger.FromContext(request.Context())
+			requestLogger.LogAttrs(request.Context(), slog.LevelInfo, "http request",
+				httpRequestLogAttrs(request, recorder.status, duration, recorder.principal)...,
 			)
+			if recorder.error != nil {
+				requestLogger.LogAttrs(request.Context(), errorLogLevel(recorder.status), "http error",
+					httpErrorLogAttrs(request, recorder.status, duration, *recorder.error, recorder.principal)...,
+				)
+			}
 		})
 	}
 }
@@ -110,7 +113,7 @@ func recoverMiddleware(base *slog.Logger, provider providerSummaryProvider) func
 					slog.String("path", routePattern(request)),
 				)
 
-				writePanicResponse(writer, requestIDFromContext(request.Context()), middlewareProviderSummary(provider))
+				writePanicResponse(writer, request, middlewareProviderSummary(provider))
 			}()
 
 			next.ServeHTTP(writer, request)
@@ -120,14 +123,24 @@ func recoverMiddleware(base *slog.Logger, provider providerSummaryProvider) func
 
 type providerSummaryProvider func() ProviderSummary
 
-func writePanicResponse(writer stdhttp.ResponseWriter, requestID string, provider ProviderSummary) {
-	writeMiddlewareErrorResponse(writer, requestID, stdhttp.StatusInternalServerError, "", ErrorResponse{
+func writePanicResponse(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider ProviderSummary) {
+	writeMiddlewareErrorResponse(writer, request, stdhttp.StatusInternalServerError, "", "http.recover", ErrorResponse{
 		Code:    "internal_error",
 		Message: "internal server error",
 	}, provider)
 }
 
-func writeMiddlewareErrorResponse(writer stdhttp.ResponseWriter, requestID string, status int, retryAfter string, response ErrorResponse, provider ProviderSummary) {
+func writeMiddlewareErrorResponse(writer stdhttp.ResponseWriter, request *stdhttp.Request, status int, retryAfter string, source string, response ErrorResponse, provider ProviderSummary) {
+	requestID := ""
+	if request != nil {
+		requestID = requestIDFromContext(request.Context())
+	}
+	recordError(writer, errorLogDetail{
+		Code:    response.Code,
+		Message: response.Message,
+		Source:  source,
+		Details: response.Details,
+	})
 	writer.Header().Set("Content-Type", "application/json")
 	if requestID != "" {
 		writer.Header().Set(requestIDHeader, requestID)
@@ -181,14 +194,38 @@ func remoteAddr(request *stdhttp.Request) string {
 	return request.RemoteAddr
 }
 
+type errorLogDetail struct {
+	Code    string
+	Message string
+	Cause   string
+	Source  string
+	Details []ErrorFieldDetail
+}
+
 type statusRecorder struct {
 	stdhttp.ResponseWriter
-	status int
+	status    int
+	error     *errorLogDetail
+	principal *AuthPrincipal
 }
 
 func (recorder *statusRecorder) WriteHeader(status int) {
 	recorder.status = status
 	recorder.ResponseWriter.WriteHeader(status)
+}
+
+func (recorder *statusRecorder) RecordError(detail errorLogDetail) {
+	recorder.error = &detail
+	if nested, ok := recorder.ResponseWriter.(interface{ RecordError(errorLogDetail) }); ok {
+		nested.RecordError(detail)
+	}
+}
+
+func (recorder *statusRecorder) RecordPrincipal(principal AuthPrincipal) {
+	recorder.principal = &principal
+	if nested, ok := recorder.ResponseWriter.(interface{ RecordPrincipal(AuthPrincipal) }); ok {
+		nested.RecordPrincipal(principal)
+	}
 }
 
 // Flush forwards SSE flushes to the underlying ResponseWriter when it supports
@@ -212,4 +249,80 @@ func routePattern(request *stdhttp.Request) string {
 	}
 
 	return pattern
+}
+
+func recordError(writer stdhttp.ResponseWriter, detail errorLogDetail) {
+	if recorder, ok := writer.(interface{ RecordError(errorLogDetail) }); ok {
+		recorder.RecordError(detail)
+	}
+}
+
+func recordPrincipal(writer stdhttp.ResponseWriter, principal AuthPrincipal) {
+	if recorder, ok := writer.(interface{ RecordPrincipal(AuthPrincipal) }); ok {
+		recorder.RecordPrincipal(principal)
+	}
+}
+
+func httpRequestLogAttrs(request *stdhttp.Request, status int, duration time.Duration, principal *AuthPrincipal) []slog.Attr {
+	route := routePattern(request)
+	return append([]slog.Attr{
+		slog.String("component", "http"),
+		slog.String("operation", request.Method+" "+route),
+		slog.String("method", request.Method),
+		slog.String("path", request.URL.Path),
+		slog.String("route", route),
+		slog.Int("status", status),
+		slog.String("statusText", stdhttp.StatusText(status)),
+		slog.Int64("durationMs", duration.Milliseconds()),
+		slog.String("remote", remoteAddr(request)),
+	}, principalLogAttrs(principal)...)
+}
+
+func httpErrorLogAttrs(request *stdhttp.Request, status int, duration time.Duration, detail errorLogDetail, principal *AuthPrincipal) []slog.Attr {
+	route := routePattern(request)
+	attrs := append([]slog.Attr{
+		slog.String("component", "http"),
+		slog.String("source", detail.Source),
+		slog.String("operation", request.Method+" "+route),
+		slog.String("method", request.Method),
+		slog.String("path", request.URL.Path),
+		slog.String("route", route),
+		slog.Int("status", status),
+		slog.String("statusText", stdhttp.StatusText(status)),
+		slog.String("code", detail.Code),
+		slog.String("message", SanitizeExternalMessage(detail.Message)),
+		slog.Int64("durationMs", duration.Milliseconds()),
+		slog.String("remote", remoteAddr(request)),
+	}, principalLogAttrs(principal)...)
+	if detail.Cause != "" && detail.Cause != detail.Message {
+		attrs = append(attrs, slog.String("cause", SanitizeExternalMessage(detail.Cause)))
+	}
+	if len(detail.Details) > 0 {
+		attrs = append(attrs, slog.Any("details", detail.Details))
+	}
+	return attrs
+}
+
+func principalLogAttrs(principal *AuthPrincipal) []slog.Attr {
+	if principal == nil {
+		return nil
+	}
+	attrs := []slog.Attr{slog.String("authSource", string(principal.Source))}
+	if principal.UserID != "" {
+		attrs = append(attrs, slog.String("userId", principal.UserID))
+	}
+	if principal.KeyID != "" {
+		attrs = append(attrs, slog.String("keyId", principal.KeyID))
+	}
+	if principal.Role != "" {
+		attrs = append(attrs, slog.String("role", string(principal.Role)))
+	}
+	return attrs
+}
+
+func errorLogLevel(status int) slog.Level {
+	if status >= stdhttp.StatusInternalServerError {
+		return slog.LevelError
+	}
+	return slog.LevelWarn
 }

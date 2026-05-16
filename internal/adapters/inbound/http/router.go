@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	stdhttp "net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -27,12 +28,15 @@ type RouterOptions struct {
 	RateLimit          RateLimitConfig
 	Auth               AuthConfig
 	Cookies            CookieConfig
+	TimeLocation       *time.Location
 	Metrics            stdhttp.Handler
 	Liveness           stdhttp.Handler
 	Readiness          stdhttp.Handler
 	ReadinessChecker   *health.Checker
 	Capabilities       CapabilitiesResponse
+	CapabilitiesFunc   func() CapabilitiesResponse
 	Provider           ProviderSummary
+	ProviderFunc       func() ProviderSummary
 	RetentionPolicy    RetentionPolicyOptions
 	Trace              *usecase.Trace
 	APIKeys            *usecase.APIKey
@@ -90,7 +94,7 @@ func NewRouter(analysis *usecase.Analysis, chat *usecase.Chat, opts RouterOption
 		setup:           opts.Setup,
 		providerConfigs: opts.ProviderConfigs,
 		llmConfigs:      opts.LLMConfigs,
-		validate:        validator.New(validator.WithRequiredStructEnabled()),
+		validate:        newRequestValidator(),
 		logger:          opts.Logger,
 		options:         opts,
 	}
@@ -154,74 +158,56 @@ func (router *Router) routes() {
 	router.mux.Method(stdhttp.MethodPost, "/v1/analyses/{analysisID}/chat/{messageID}/regenerate", writer(router.handleChatRegenerate))
 	router.mux.Method(stdhttp.MethodPost, "/v1/telemetry", reader(router.handleTelemetry))
 
-	if router.setup != nil {
-		router.mux.Method(stdhttp.MethodGet, "/v1/setup/status", stdhttp.HandlerFunc(router.handleSetupStatus))
-		router.mux.Method(stdhttp.MethodPost, "/v1/setup/admin", stdhttp.HandlerFunc(router.handleBootstrapAdmin))
-	}
+	router.mux.Method(stdhttp.MethodGet, "/v1/setup/status", router.requireConfigured("setup", router.setup != nil, router.handleSetupStatus))
+	router.mux.Method(stdhttp.MethodPost, "/v1/setup/admin", router.requireConfigured("setup", router.setup != nil, router.handleBootstrapAdmin))
 
-	if router.sessions != nil {
-		router.mux.Method(stdhttp.MethodPost, "/v1/auth/login", stdhttp.HandlerFunc(router.handleLogin))
-		router.mux.Method(stdhttp.MethodPost, "/v1/auth/logout", stdhttp.HandlerFunc(router.handleLogout))
-		router.mux.Method(stdhttp.MethodPost, "/v1/auth/refresh", stdhttp.HandlerFunc(router.handleRefresh))
-		router.mux.Method(stdhttp.MethodGet, "/v1/me", reader(router.handleMe))
-		router.mux.Method(stdhttp.MethodPatch, "/v1/me", reader(router.handleUpdateMe))
-		router.mux.Method(stdhttp.MethodPost, "/v1/me/password", reader(router.handleChangePassword))
-		router.mux.Method(stdhttp.MethodGet, "/v1/me/preferences", reader(router.handleGetPreferences))
-		router.mux.Method(stdhttp.MethodPatch, "/v1/me/preferences", reader(router.handleUpdatePreferences))
-		router.mux.Method(stdhttp.MethodGet, "/v1/me/sessions", reader(router.handleListSessions))
-		router.mux.Method(stdhttp.MethodGet, "/v1/me/keys", reader(router.handleListMyKeys))
-	}
+	router.mux.Method(stdhttp.MethodPost, "/v1/auth/login", router.requireConfigured("user sessions", router.sessions != nil, router.handleLogin))
+	router.mux.Method(stdhttp.MethodPost, "/v1/auth/logout", router.requireConfigured("user sessions", router.sessions != nil, router.handleLogout))
+	router.mux.Method(stdhttp.MethodPost, "/v1/auth/refresh", router.requireConfigured("user sessions", router.sessions != nil, router.handleRefresh))
+	router.mux.Method(stdhttp.MethodGet, "/v1/me", router.requireConfigured("user sessions", router.sessions != nil, reader(router.handleMe)))
+	router.mux.Method(stdhttp.MethodPatch, "/v1/me", router.requireConfigured("user sessions", router.sessions != nil, reader(router.handleUpdateMe)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/me/password", router.requireConfigured("user sessions", router.sessions != nil, reader(router.handleChangePassword)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/me/preferences", router.requireConfigured("user sessions", router.sessions != nil, reader(router.handleGetPreferences)))
+	router.mux.Method(stdhttp.MethodPatch, "/v1/me/preferences", router.requireConfigured("user sessions", router.sessions != nil, reader(router.handleUpdatePreferences)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/me/sessions", router.requireConfigured("user sessions", router.sessions != nil, reader(router.handleListSessions)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/me/keys", router.requireConfigured("api keys", router.apiKeys != nil, reader(router.handleListMyKeys)))
 
-	if router.apiKeys != nil {
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/keys", admin(router.handleIssueAPIKey))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/keys", admin(router.handleListAPIKeys))
-		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/keys/{keyID}", admin(router.handleRevokeAPIKey))
-	}
-	if router.webhooks != nil {
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks", admin(router.handleCreateWebhook))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhooks", admin(router.handleListWebhooks))
-		router.mux.Method(stdhttp.MethodPatch, "/v1/admin/webhooks/{webhookID}", admin(router.handleUpdateWebhook))
-		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/webhooks/{webhookID}", admin(router.handleDeleteWebhook))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks/{webhookID}/test", admin(router.handleTestWebhook))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhook-deliveries", admin(router.handleListWebhookDeliveries))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhook-deliveries/{deliveryID}/retry", admin(router.handleRetryWebhookDelivery))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhook-deliveries/{deliveryID}/replay", admin(router.handleReplayWebhookDelivery))
-	}
-	if router.auditLog != nil {
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/audit", admin(router.handleListAudit))
-	}
-	if router.retention != nil {
-		router.mux.Method(stdhttp.MethodDelete, "/v1/analyses/{analysisID}", writer(router.handleDeleteAnalysis))
-		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/analyses", admin(router.handlePurgeAnalyses))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/retention/policy", admin(router.handleRetentionPolicy))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/retention/preview", admin(router.handleRetentionPreview))
-	}
-	if router.users != nil {
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/users", admin(router.handleListUsers))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/users", admin(router.handleCreateUser))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/users/{userID}", admin(router.handleGetUser))
-		router.mux.Method(stdhttp.MethodPatch, "/v1/admin/users/{userID}", admin(router.handleUpdateUser))
-		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/users/{userID}", admin(router.handleDeleteUser))
-	}
-	if router.providerConfigs != nil {
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/providers", admin(router.handleListProviderConfigs))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers", admin(router.handleCreateProviderConfig))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/providers/{providerID}", admin(router.handleGetProviderConfig))
-		router.mux.Method(stdhttp.MethodPatch, "/v1/admin/providers/{providerID}", admin(router.handleUpdateProviderConfig))
-		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/providers/{providerID}", admin(router.handleDeleteProviderConfig))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers/{providerID}/test", admin(router.handleTestProviderConfig))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers/{providerID}/activate", admin(router.handleActivateProviderConfig))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers/{providerID}/deactivate", admin(router.handleDeactivateProviderConfig))
-	}
-	if router.llmConfigs != nil {
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/llm-providers", admin(router.handleListLLMConfigs))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers", admin(router.handleCreateLLMConfig))
-		router.mux.Method(stdhttp.MethodGet, "/v1/admin/llm-providers/{llmID}", admin(router.handleGetLLMConfig))
-		router.mux.Method(stdhttp.MethodPatch, "/v1/admin/llm-providers/{llmID}", admin(router.handleUpdateLLMConfig))
-		router.mux.Method(stdhttp.MethodDelete, "/v1/admin/llm-providers/{llmID}", admin(router.handleDeleteLLMConfig))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers/{llmID}/test", admin(router.handleTestLLMConfig))
-		router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers/{llmID}/activate", admin(router.handleActivateLLMConfig))
-	}
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/keys", router.requireConfigured("api keys", router.apiKeys != nil, admin(router.handleIssueAPIKey)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/keys", router.requireConfigured("api keys", router.apiKeys != nil, admin(router.handleListAPIKeys)))
+	router.mux.Method(stdhttp.MethodDelete, "/v1/admin/keys/{keyID}", router.requireConfigured("api keys", router.apiKeys != nil, admin(router.handleRevokeAPIKey)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks", router.requireConfigured("webhooks", router.webhooks != nil, admin(router.handleCreateWebhook)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhooks", router.requireConfigured("webhooks", router.webhooks != nil, admin(router.handleListWebhooks)))
+	router.mux.Method(stdhttp.MethodPatch, "/v1/admin/webhooks/{webhookID}", router.requireConfigured("webhooks", router.webhooks != nil, admin(router.handleUpdateWebhook)))
+	router.mux.Method(stdhttp.MethodDelete, "/v1/admin/webhooks/{webhookID}", router.requireConfigured("webhooks", router.webhooks != nil, admin(router.handleDeleteWebhook)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhooks/{webhookID}/test", router.requireConfigured("webhooks", router.webhooks != nil, admin(router.handleTestWebhook)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/webhook-deliveries", router.requireConfigured("webhooks", router.webhooks != nil, admin(router.handleListWebhookDeliveries)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhook-deliveries/{deliveryID}/retry", router.requireConfigured("webhooks", router.webhooks != nil, admin(router.handleRetryWebhookDelivery)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/webhook-deliveries/{deliveryID}/replay", router.requireConfigured("webhooks", router.webhooks != nil, admin(router.handleReplayWebhookDelivery)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/audit", router.requireConfigured("audit log", router.auditLog != nil, admin(router.handleListAudit)))
+	router.mux.Method(stdhttp.MethodDelete, "/v1/analyses/{analysisID}", router.requireConfigured("analysis retention", router.retention != nil, writer(router.handleDeleteAnalysis)))
+	router.mux.Method(stdhttp.MethodDelete, "/v1/admin/analyses", router.requireConfigured("analysis retention", router.retention != nil, admin(router.handlePurgeAnalyses)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/retention/policy", router.requireConfigured("analysis retention", router.retention != nil, admin(router.handleRetentionPolicy)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/retention/preview", router.requireConfigured("analysis retention", router.retention != nil, admin(router.handleRetentionPreview)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/users", router.requireConfigured("user administration", router.users != nil, admin(router.handleListUsers)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/users", router.requireConfigured("user administration", router.users != nil, admin(router.handleCreateUser)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/users/{userID}", router.requireConfigured("user administration", router.users != nil, admin(router.handleGetUser)))
+	router.mux.Method(stdhttp.MethodPatch, "/v1/admin/users/{userID}", router.requireConfigured("user administration", router.users != nil, admin(router.handleUpdateUser)))
+	router.mux.Method(stdhttp.MethodDelete, "/v1/admin/users/{userID}", router.requireConfigured("user administration", router.users != nil, admin(router.handleDeleteUser)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/providers", router.requireConfigured("provider configuration", router.providerConfigs != nil, admin(router.handleListProviderConfigs)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers", router.requireConfigured("provider configuration", router.providerConfigs != nil, admin(router.handleCreateProviderConfig)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/providers/{providerID}", router.requireConfigured("provider configuration", router.providerConfigs != nil, admin(router.handleGetProviderConfig)))
+	router.mux.Method(stdhttp.MethodPatch, "/v1/admin/providers/{providerID}", router.requireConfigured("provider configuration", router.providerConfigs != nil, admin(router.handleUpdateProviderConfig)))
+	router.mux.Method(stdhttp.MethodDelete, "/v1/admin/providers/{providerID}", router.requireConfigured("provider configuration", router.providerConfigs != nil, admin(router.handleDeleteProviderConfig)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers/{providerID}/test", router.requireConfigured("provider configuration", router.providerConfigs != nil, admin(router.handleTestProviderConfig)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers/{providerID}/activate", router.requireConfigured("provider configuration", router.providerConfigs != nil, admin(router.handleActivateProviderConfig)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/providers/{providerID}/deactivate", router.requireConfigured("provider configuration", router.providerConfigs != nil, admin(router.handleDeactivateProviderConfig)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/llm-providers", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleListLLMConfigs)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleCreateLLMConfig)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/llm-providers/{llmID}", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleGetLLMConfig)))
+	router.mux.Method(stdhttp.MethodPatch, "/v1/admin/llm-providers/{llmID}", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleUpdateLLMConfig)))
+	router.mux.Method(stdhttp.MethodDelete, "/v1/admin/llm-providers/{llmID}", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleDeleteLLMConfig)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers/{llmID}/test", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleTestLLMConfig)))
+	router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers/{llmID}/activate", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleActivateLLMConfig)))
 
 	if router.options.Metrics != nil {
 		router.mux.Handle("/metrics", router.options.Metrics)
@@ -251,6 +237,18 @@ func (router *Router) handleReadiness(writer stdhttp.ResponseWriter, request *st
 	router.writeSuccess(writer, requestID, startedAt, status, toReadinessResponseDto(result))
 }
 
+func (router *Router) requireConfigured(feature string, configured bool, next stdhttp.HandlerFunc) stdhttp.HandlerFunc {
+	return func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+		if !configured {
+			startedAt := time.Now()
+			requestID := router.requestID(request)
+			router.writeError(writer, requestID, startedAt, stdhttp.StatusServiceUnavailable, "feature_not_configured", feature+" is not configured on this instance")
+			return
+		}
+		next(writer, request)
+	}
+}
+
 func (router *Router) handleNotFound(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 	startedAt := time.Now()
 	requestID := router.requestID(request)
@@ -266,7 +264,7 @@ func (router *Router) handleMethodNotAllowed(writer stdhttp.ResponseWriter, requ
 func (router *Router) handleCapabilities(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 	startedAt := time.Now()
 	requestID := router.requestID(request)
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, router.options.Capabilities)
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, router.capabilities())
 }
 
 func (router *Router) handleSubmitAnalysis(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -724,6 +722,9 @@ func (router *Router) writeSuccessWithPagination(writer stdhttp.ResponseWriter, 
 }
 
 func (router *Router) providerSummary() ProviderSummary {
+	if router.options.ProviderFunc != nil {
+		return router.options.ProviderFunc()
+	}
 	if router.options.Provider.Mode != "" {
 		return router.options.Provider
 	}
@@ -732,6 +733,13 @@ func (router *Router) providerSummary() ProviderSummary {
 		LLM:           "fake",
 		Mode:          "local",
 	}
+}
+
+func (router *Router) capabilities() CapabilitiesResponse {
+	if router.options.CapabilitiesFunc != nil {
+		return router.options.CapabilitiesFunc()
+	}
+	return router.options.Capabilities
 }
 
 func (router *Router) writeError(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, status int, code string, message string) {
@@ -743,6 +751,13 @@ func (router *Router) writeError(writer stdhttp.ResponseWriter, requestID string
 }
 
 func (router *Router) writeErrorResponse(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, response httpErrorResponse) {
+	recordError(writer, errorLogDetail{
+		Code:    response.code,
+		Message: response.message,
+		Cause:   response.cause,
+		Source:  "http.handler",
+		Details: response.details,
+	})
 	router.writeJSON(writer, response.status, WrapperDtoResponde[ErrorResponse]{
 		Data: ErrorResponse{
 			Code:    response.code,
@@ -755,6 +770,38 @@ func (router *Router) writeErrorResponse(writer stdhttp.ResponseWriter, requestI
 			Provider:         router.providerSummary(),
 		},
 	})
+}
+
+func newRequestValidator() *validator.Validate {
+	validate := validator.New(validator.WithRequiredStructEnabled())
+	validate.RegisterTagNameFunc(jsonFieldName)
+	return validate
+}
+
+func jsonFieldName(field reflect.StructField) string {
+	jsonTag := field.Tag.Get("json")
+	fieldName := strings.Split(jsonTag, ",")[0]
+	if fieldName == "" {
+		return field.Name
+	}
+	if fieldName == "-" {
+		return ""
+	}
+	return fieldName
+}
+
+func (router *Router) formatTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.In(router.timeLocation()).Format(time.RFC3339)
+}
+
+func (router *Router) timeLocation() *time.Location {
+	if router.options.TimeLocation != nil {
+		return router.options.TimeLocation
+	}
+	return time.Local
 }
 
 func (router *Router) writeJSON(writer stdhttp.ResponseWriter, status int, payload any) {

@@ -6,6 +6,7 @@
 
 ARG GO_VERSION=1.26
 ARG ALPINE_VERSION=3.22
+ARG DEFAULT_TIMEZONE=America/Sao_Paulo
 
 FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
 
@@ -35,6 +36,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 FROM alpine:${ALPINE_VERSION} AS runtime
 
+ARG DEFAULT_TIMEZONE
+
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S observai \
     && adduser -S observai -G observai \
@@ -49,7 +52,8 @@ COPY --chown=observai:observai migrations/ /app/migrations/
 
 USER observai
 
-ENV OBSERVAI_API_PORT=8080 \
+ENV TZ=${DEFAULT_TIMEZONE} \
+    OBSERVAI_API_PORT=8080 \
     OBSERVAI_PROMPTS_DIR=/app/agents \
     OBSERVAI_MIGRATIONS_DIR=/app/migrations
 

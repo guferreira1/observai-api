@@ -17,9 +17,6 @@ var ErrAnalysisNotFound = errors.New("analysis not found")
 // ErrInvalidChatQuestion indicates that a chat question payload is invalid.
 var ErrInvalidChatQuestion = errors.New("invalid chat question")
 
-// ErrQuestionOutOfScope indicates that a chat question is unrelated to the active analysis.
-var ErrQuestionOutOfScope = errors.New("question out of analysis scope")
-
 // ErrAnalysisContextNotFound indicates that cached analysis context is unavailable.
 var ErrAnalysisContextNotFound = errors.New("analysis context not found")
 
@@ -28,6 +25,9 @@ var ErrAnalysisContextNotFound = errors.New("analysis context not found")
 // place of synthetic data when the operator runs the API in local/dev mode
 // without configuring the corresponding observability or LLM provider.
 var ErrProviderNotConfigured = errors.New("provider not configured")
+
+// ErrTraceNotFound indicates that an analysis has no retrievable trace reference.
+var ErrTraceNotFound = errors.New("trace not found")
 
 // Severity describes the operational impact detected by an analysis.
 type Severity string

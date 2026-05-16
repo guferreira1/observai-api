@@ -103,7 +103,7 @@ func rateLimitMiddleware(limiter *rateLimiter, provider providerSummaryProvider)
 	return func(next stdhttp.Handler) stdhttp.Handler {
 		return stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
 			if !limiter.Allow(clientIP(request)) {
-				writeRateLimitedResponse(writer, requestIDFromContext(request.Context()), middlewareProviderSummary(provider))
+				writeRateLimitedResponse(writer, request, middlewareProviderSummary(provider))
 				return
 			}
 			next.ServeHTTP(writer, request)
@@ -128,8 +128,8 @@ func clientIP(request *stdhttp.Request) string {
 	return address
 }
 
-func writeRateLimitedResponse(writer stdhttp.ResponseWriter, requestID string, provider ProviderSummary) {
-	writeMiddlewareErrorResponse(writer, requestID, stdhttp.StatusTooManyRequests, "1", ErrorResponse{
+func writeRateLimitedResponse(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider ProviderSummary) {
+	writeMiddlewareErrorResponse(writer, request, stdhttp.StatusTooManyRequests, "1", "http.rate_limit", ErrorResponse{
 		Code:    "rate_limited",
 		Message: "request rate exceeded; retry shortly",
 	}, provider)

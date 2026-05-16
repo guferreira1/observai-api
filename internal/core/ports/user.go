@@ -14,7 +14,7 @@ type UserRepository interface {
 	FindByEmail(ctx context.Context, email string) (domain.User, error)
 	List(ctx context.Context, limit int, offset int) ([]domain.User, error)
 	Count(ctx context.Context) (int64, error)
-	UpdateProfile(ctx context.Context, id string, email string, updatedAt time.Time) error
+	UpdateProfile(ctx context.Context, id string, name string, email string, updatedAt time.Time) error
 	UpdatePreferences(ctx context.Context, id string, preferences domain.UserPreferences, updatedAt time.Time) error
 	UpdatePassword(ctx context.Context, id string, passwordHash string, updatedAt time.Time) error
 	UpdateRole(ctx context.Context, id string, role domain.Role, updatedAt time.Time) error

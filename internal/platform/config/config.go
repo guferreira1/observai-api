@@ -14,6 +14,7 @@ import (
 
 	"github.com/guferreira1/observai-api/internal/platform/crypto"
 	"github.com/ilyakaznacheev/cleanenv"
+	"github.com/joho/godotenv"
 )
 
 // ErrEncryptionKeyMissing indicates the operator did not provide an
@@ -232,6 +233,7 @@ type Config struct {
 	Port                    string              `yaml:"port" env:"OBSERVAI_API_PORT" env-default:"8080"`
 	Env                     string              `yaml:"env" env:"OBSERVAI_ENV" env-default:"local"`
 	Mode                    Mode                `yaml:"mode" env:"OBSERVAI_MODE" env-default:"local"`
+	TimeZone                string              `yaml:"timezone" env:"OBSERVAI_TIMEZONE" env-default:"Local"`
 	DatabaseDSN             string              `yaml:"database_dsn" env:"OBSERVAI_DATABASE_DSN"`
 	RedisURL                string              `yaml:"redis_url" env:"OBSERVAI_REDIS_URL"`
 	EncryptionKey           string              `yaml:"encryption_key" env:"OBSERVAI_ENCRYPTION_KEY"`
@@ -260,6 +262,10 @@ type Config struct {
 func Load() (Config, error) {
 	var cfg Config
 
+	if err := loadDotEnv(); err != nil {
+		return Config{}, err
+	}
+
 	configFile := strings.TrimSpace(os.Getenv("OBSERVAI_CONFIG_FILE"))
 	if configFile != "" {
 		if err := cleanenv.ReadConfig(configFile, &cfg); err != nil {
@@ -278,6 +284,13 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func loadDotEnv() error {
+	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("load .env: %w", err)
+	}
+	return nil
 }
 
 // migrateLegacyProviderConfig promotes the deprecated PrometheusConfig and
@@ -359,6 +372,18 @@ func hasLLMProviderType(providers []LLMProviderConfig, providerType string) bool
 // external dependency to be explicitly configured, ensuring the API never
 // silently falls back to in-memory or fake adapters.
 func (cfg Config) Validate() error {
+	if _, err := cfg.TimeLocation(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.EncryptionKey) != "" {
+		if _, err := crypto.LoadKey(cfg.EncryptionKey); err != nil {
+			return fmt.Errorf("OBSERVAI_ENCRYPTION_KEY must decode to %d bytes (hex or base64): %w", crypto.KeyLength, err)
+		}
+	}
+	if jwtSecret := strings.TrimSpace(cfg.JWT.Secret); jwtSecret != "" && len(jwtSecret) < crypto.MinJWTSecretLength {
+		return fmt.Errorf("OBSERVAI_JWT_SECRET must be at least %d bytes", crypto.MinJWTSecretLength)
+	}
+
 	if cfg.Mode == ModeLocal {
 		return nil
 	}
@@ -379,16 +404,20 @@ func (cfg Config) Validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("mode=%s requires: %s", cfg.Mode, strings.Join(missing, ", "))
 	}
-
-	if strings.TrimSpace(cfg.EncryptionKey) != "" {
-		if _, err := crypto.LoadKey(cfg.EncryptionKey); err != nil {
-			return fmt.Errorf("OBSERVAI_ENCRYPTION_KEY must decode to %d bytes (hex or base64): %w", crypto.KeyLength, err)
-		}
-	}
-	if jwtSecret := strings.TrimSpace(cfg.JWT.Secret); jwtSecret != "" && len(jwtSecret) < crypto.MinJWTSecretLength {
-		return fmt.Errorf("OBSERVAI_JWT_SECRET must be at least %d bytes", crypto.MinJWTSecretLength)
-	}
 	return nil
+}
+
+// TimeLocation loads the configured IANA timezone used for HTTP response timestamps.
+func (cfg Config) TimeLocation() (*time.Location, error) {
+	timeZone := strings.TrimSpace(cfg.TimeZone)
+	if timeZone == "" {
+		timeZone = "Local"
+	}
+	location, err := time.LoadLocation(timeZone)
+	if err != nil {
+		return nil, fmt.Errorf("OBSERVAI_TIMEZONE must be a valid IANA timezone: %w", err)
+	}
+	return location, nil
 }
 
 // LoadEncryptionKey decodes the configured encryption key into raw bytes.

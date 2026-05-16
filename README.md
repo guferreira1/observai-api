@@ -224,9 +224,11 @@ Minimum local bootstrap:
 OBSERVAI_API_PORT=8080 \
 OBSERVAI_ENV=local \
 OBSERVAI_MODE=local \
+OBSERVAI_TIMEZONE=Local \
 OBSERVAI_DATABASE_DSN=postgres://observai:observai@localhost:5432/observai?sslmode=disable \
 OBSERVAI_REDIS_URL=redis://localhost:6379/0 \
-OBSERVAI_ENCRYPTION_KEY=change-me-at-least-32-characters-long \
+OBSERVAI_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+OBSERVAI_JWT_SECRET=local-development-jwt-secret-change-before-production \
 go run ./cmd/observai-api
 ```
 
@@ -236,15 +238,26 @@ Use `.env.example` as the reference for local bootstrap variables:
 OBSERVAI_API_PORT=8080
 OBSERVAI_ENV=local
 OBSERVAI_MODE=local
+OBSERVAI_TIMEZONE=Local
 OBSERVAI_DATABASE_DSN=postgres://observai:observai@localhost:5432/observai?sslmode=disable
 OBSERVAI_REDIS_URL=redis://localhost:6379/0
-OBSERVAI_ENCRYPTION_KEY=change-me-at-least-32-characters-long
+OBSERVAI_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+OBSERVAI_JWT_SECRET=local-development-jwt-secret-change-before-production
 OBSERVAI_ANALYSIS_CONTEXT_CACHE_TTL=6h
 OBSERVAI_QUEUE_CONCURRENCY=5
 OBSERVAI_QUEUE_DEQUEUE_TIMEOUT=5s
 OBSERVAI_CHAT_LOCK_TTL=60s
 OBSERVAI_CHAT_LOCK_WAIT=30s
 ```
+
+When a `.env` file exists in the API working directory, it is loaded on
+startup before the environment is read. Already exported variables still take
+precedence over values from `.env`.
+
+The Docker image sets `TZ=America/Sao_Paulo` by default so `OBSERVAI_TIMEZONE=Local`
+uses the container timezone. Build another default with
+`--build-arg DEFAULT_TIMEZONE=Etc/UTC`, or override `TZ`/`OBSERVAI_TIMEZONE`
+at runtime for another deployment region.
 
 ## Async analysis and concurrent chat
 
@@ -281,42 +294,14 @@ go tool air
 ```
 
 By default, the API runs in local mode with in-memory fallbacks when external
-dependencies are not configured. To run Air against local Postgres/Redis, export
-the variables from `.env.example` first:
+dependencies are not configured. To run Air against local Postgres/Redis, create
+`.env` from `.env.example` first:
 
 ```bash
-set -a
-. ./.env.example
-set +a
+cp .env.example .env
 go tool air
 ```
 
----
-
-## Run with Docker Compose
-
-```bash
-docker compose up -d
-```
-
-API:
-
-```txt
-http://localhost:8080
-```
-
-Swagger UI:
-
-```txt
-http://localhost:8080/docs
-http://localhost:8080/swagger
-```
-
-Health check:
-
-```txt
-http://localhost:8080/health
-```
 
 ---
 
@@ -332,7 +317,13 @@ SQL queries prepared for sqlc live under `internal/adapters/outbound/postgres/qu
 
 ---
 
-## Example Docker Compose
+## Container deployment sketch
+
+The repository intentionally does not ship a root `docker-compose.yml`.
+Deployment topology depends on the operator's database, cache, observability
+providers, LLM providers, ingress and secret-management choices. The snippet
+below is only a minimal container wiring reference for the API plus its core
+Postgres/Redis dependencies.
 
 ```yaml
 services:
@@ -343,6 +334,8 @@ services:
       - "8080:8080"
     env_file:
       - .env
+    environment:
+      TZ: America/Sao_Paulo
     depends_on:
       - postgres
       - redis

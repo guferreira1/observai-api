@@ -1,16 +1,16 @@
 package factory
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
-
-	"context"
 
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/composite"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/datadog"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/dynatrace"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/elasticsearch"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/jaeger"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/loki"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/newrelic"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/null"
@@ -27,6 +27,7 @@ type CollectorClients struct {
 	Prometheus    *prometheusadapter.Client
 	Loki          *loki.Client
 	Elasticsearch *elasticsearch.Client
+	Jaeger        *jaeger.Client
 }
 
 // ObservabilityResult is the outcome of wiring observability providers.
@@ -53,6 +54,7 @@ var collectorBuilders = map[string]collectorBuilder{
 	"opensearch":    buildElasticsearchCollector,
 	"dynatrace":     buildDynatraceCollector,
 	"datadog":       buildDatadogCollector,
+	"jaeger":        buildJaegerCollector,
 	"newrelic":      buildNewRelicCollector,
 }
 
@@ -73,17 +75,16 @@ func BuildObservability(cfg config.Config, deps Dependencies) (ObservabilityResu
 	for _, provider := range cfg.Observability.Providers {
 		providerType := strings.ToLower(strings.TrimSpace(provider.Type))
 
-		if _, isTraceOnly := traceBuilders[providerType]; isTraceOnly {
-			capabilities = append(capabilities, ProviderCapability{
-				Name:    capabilityName(provider),
-				Type:    providerType,
-				Signals: nonEmptyStrings(provider.Signals, "traces"),
-			})
-			continue
-		}
-
 		builder, ok := collectorBuilders[providerType]
 		if !ok {
+			if _, isTraceOnly := traceBuilders[providerType]; isTraceOnly {
+				capabilities = append(capabilities, ProviderCapability{
+					Name:    capabilityName(provider),
+					Type:    providerType,
+					Signals: nonEmptyStrings(provider.Signals, "traces"),
+				})
+				continue
+			}
 			return ObservabilityResult{}, fmt.Errorf("unsupported observability provider type %q (supported: %s)", provider.Type, supportedCollectorTypes())
 		}
 
@@ -114,6 +115,37 @@ func BuildObservability(cfg config.Config, deps Dependencies) (ObservabilityResu
 		Capabilities: capabilities,
 		Clients:      clients,
 	}, nil
+}
+
+func buildJaegerCollector(provider config.ObservabilityProviderConfig, deps Dependencies, clients *CollectorClients) (composite.NamedCollector, ProviderCapability, error) {
+	url := strings.TrimSpace(provider.URL)
+	if url == "" {
+		return composite.NamedCollector{}, ProviderCapability{}, fmt.Errorf("jaeger provider requires a non-empty url")
+	}
+
+	client, err := jaeger.NewClient(jaeger.ClientOptions{
+		BaseURL:  url,
+		Timeout:  defaultTimeout(provider.Timeout, 15*time.Second),
+		Observer: deps.Observer,
+	})
+	if err != nil {
+		return composite.NamedCollector{}, ProviderCapability{}, err
+	}
+
+	clients.Jaeger = client
+
+	name := capabilityName(provider)
+	collector := jaeger.NewSignalCollector(client, jaeger.SignalCollectorOptions{})
+	signals := nonEmptyStrings(provider.Signals, "traces")
+
+	return composite.NamedCollector{
+			Name:      name,
+			Collector: collector,
+		}, ProviderCapability{
+			Name:    name,
+			Type:    "jaeger",
+			Signals: signals,
+		}, nil
 }
 
 func buildPrometheusCollector(provider config.ObservabilityProviderConfig, deps Dependencies, clients *CollectorClients) (composite.NamedCollector, ProviderCapability, error) {

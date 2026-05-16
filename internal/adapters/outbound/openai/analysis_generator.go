@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/llmguard"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/prompts"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 )
@@ -72,17 +73,24 @@ func (generator *AnalysisGenerator) Generate(ctx context.Context, request domain
 		return domain.AnalysisResult{}, fmt.Errorf("openai analysis call: %w", err)
 	}
 
-	return decodeAnalysisPayload(content, evidence)
+	return decodeAnalysisPayload(content, request, evidence)
 }
 
 func buildAnalysisUserMessage(request domain.AnalysisRequest, evidence []domain.Evidence) (string, error) {
+	catalog := llmguard.NewEvidenceCatalog(evidence)
+	services := llmguard.NewServiceCatalog(request.AffectedServices, evidence)
 	body := map[string]any{
-		"goal":             request.Goal,
-		"timeWindow":       map[string]any{"start": request.TimeWindow.Start, "end": request.TimeWindow.End},
-		"affectedServices": request.AffectedServices,
-		"signals":          request.Signals,
-		"context":          request.Context,
-		"evidence":         evidence,
+		"goal":                  request.Goal,
+		"timeWindow":            map[string]any{"start": request.TimeWindow.Start, "end": request.TimeWindow.End},
+		"affectedServices":      request.AffectedServices,
+		"signals":               request.Signals,
+		"context":               request.Context,
+		"evidence":              evidence,
+		"responseLanguage":      llmguard.ResponseLanguage(request.Goal, request.Context),
+		"validAffectedServices": services.Values(),
+		"validEvidenceNames":    catalog.Names(),
+		"validEvidenceIds":      catalog.IDs(),
+		"groundingRules":        llmguard.GroundingRules(),
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -90,12 +98,12 @@ func buildAnalysisUserMessage(request domain.AnalysisRequest, evidence []domain.
 	}
 
 	var buffer strings.Builder
-	buffer.WriteString("Return ONLY a JSON object matching the documented analysis schema. Input:\n")
+	buffer.WriteString("Return ONLY a JSON object matching the documented analysis schema. Use responseLanguage for natural-language fields. Input:\n")
 	buffer.Write(encoded)
 	return buffer.String(), nil
 }
 
-func decodeAnalysisPayload(content string, evidence []domain.Evidence) (domain.AnalysisResult, error) {
+func decodeAnalysisPayload(content string, request domain.AnalysisRequest, evidence []domain.Evidence) (domain.AnalysisResult, error) {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return domain.AnalysisResult{}, fmt.Errorf("openai returned empty analysis content")
@@ -106,11 +114,17 @@ func decodeAnalysisPayload(content string, evidence []domain.Evidence) (domain.A
 		return domain.AnalysisResult{}, fmt.Errorf("decode openai analysis json: %w", err)
 	}
 
+	catalog := llmguard.NewEvidenceCatalog(evidence)
+	services := llmguard.NewServiceCatalog(request.AffectedServices, evidence)
 	rootCauses := make([]domain.RootCauseHypothesis, 0, len(payload.PossibleRootCauses))
 	for _, item := range payload.PossibleRootCauses {
+		supportingEvidence := catalog.FilterNames(item.Evidence)
+		if len(supportingEvidence) == 0 {
+			continue
+		}
 		rootCauses = append(rootCauses, domain.RootCauseHypothesis{
 			Cause:      item.Cause,
-			Evidence:   item.Evidence,
+			Evidence:   supportingEvidence,
 			Confidence: domain.Confidence(item.Confidence),
 		})
 	}
@@ -121,7 +135,7 @@ func decodeAnalysisPayload(content string, evidence []domain.Evidence) (domain.A
 			Action:      item.Action,
 			Rationale:   item.Rationale,
 			Priority:    item.Priority,
-			EvidenceIDs: item.EvidenceIDs,
+			EvidenceIDs: catalog.FilterIDs(item.EvidenceIDs),
 		})
 	}
 
@@ -129,7 +143,7 @@ func decodeAnalysisPayload(content string, evidence []domain.Evidence) (domain.A
 		Summary:            payload.Summary,
 		Severity:           domain.Severity(payload.Severity),
 		Confidence:         domain.Confidence(payload.Confidence),
-		AffectedServices:   payload.AffectedServices,
+		AffectedServices:   services.Filter(payload.AffectedServices),
 		Evidence:           evidence,
 		DetectedAnomalies:  payload.DetectedAnomalies,
 		PossibleRootCauses: rootCauses,

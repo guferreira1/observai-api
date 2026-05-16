@@ -22,6 +22,7 @@ func newJWTFixture(t *testing.T) (*crypto.JWTSigner, *inmemory.UserRepository, d
 	users := inmemory.NewUserRepository()
 	user := domain.User{
 		ID:           "user-1",
+		Name:         "Admin User",
 		Email:        "admin@observai.io",
 		PasswordHash: "hash",
 		Role:         domain.RoleAdmin,

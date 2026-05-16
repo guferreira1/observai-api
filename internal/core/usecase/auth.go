@@ -49,6 +49,12 @@ type AuthOptions struct {
 	RefreshTokenTTL time.Duration
 }
 
+// UserProfileUpdateRequest carries editable user profile fields.
+type UserProfileUpdateRequest struct {
+	Name  string
+	Email string
+}
+
 // Auth orchestrates login, logout, refresh and profile management.
 type Auth struct {
 	users   ports.UserRepository
@@ -120,6 +126,17 @@ func (useCase *Auth) Refresh(ctx context.Context, refreshSecret string) (AuthSes
 	return useCase.issueSession(ctx, user, now, sessionRotation{FamilyID: token.FamilyID, ReplaceID: token.ID})
 }
 
+// StartSessionForUser issues an authenticated session for a known active user.
+func (useCase *Auth) StartSessionForUser(ctx context.Context, user domain.User) (AuthSession, error) {
+	if !user.IsActive {
+		return AuthSession{}, domain.ErrInvalidCredentials
+	}
+	now := useCase.now().UTC()
+	_ = useCase.users.TouchLastLogin(ctx, user.ID, now)
+	user.LastLoginAt = &now
+	return useCase.issueSession(ctx, user, now, sessionRotation{})
+}
+
 // Logout revokes the supplied refresh token. Other tokens in the family
 // remain valid so a user signed in on multiple devices keeps the rest of
 // their sessions intact.
@@ -142,12 +159,25 @@ func (useCase *Auth) Me(ctx context.Context, userID string) (domain.User, error)
 
 // UpdateProfile updates the email of the supplied user.
 func (useCase *Auth) UpdateProfile(ctx context.Context, userID string, email string) (domain.User, error) {
-	cleaned, err := normalizeEmail(email)
+	return useCase.UpdateProfileWithOptions(ctx, userID, UserProfileUpdateRequest{Email: email})
+}
+
+// UpdateProfileWithOptions updates editable profile fields for the supplied user.
+func (useCase *Auth) UpdateProfileWithOptions(ctx context.Context, userID string, request UserProfileUpdateRequest) (domain.User, error) {
+	cleanedEmail, err := normalizeEmail(request.Email)
 	if err != nil {
 		return domain.User{}, err
 	}
+	user, err := useCase.users.FindByID(ctx, userID)
+	if err != nil {
+		return domain.User{}, err
+	}
+	cleanedName := strings.TrimSpace(request.Name)
+	if cleanedName == "" {
+		cleanedName = normalizeUserName(user.Name, cleanedEmail)
+	}
 	now := useCase.now().UTC()
-	if err := useCase.users.UpdateProfile(ctx, userID, cleaned, now); err != nil {
+	if err := useCase.users.UpdateProfile(ctx, userID, cleanedName, cleanedEmail, now); err != nil {
 		return domain.User{}, err
 	}
 	return useCase.users.FindByID(ctx, userID)

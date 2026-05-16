@@ -335,6 +335,7 @@ func (useCase *Analysis) executeAnalyze(ctx context.Context, analysisID string, 
 
 	result.ID = analysisID
 	result.Evidence = evidence
+	result.TraceID = selectAnalysisTraceID(result.TraceID, evidence)
 	result.Severity = useCase.severity.Reconcile(result.Severity, policy.SeverityInput{
 		Request:  request,
 		Evidence: evidence,
@@ -354,6 +355,26 @@ func (useCase *Analysis) executeAnalyze(ctx context.Context, analysisID string, 
 	_ = useCase.cache.Save(ctx, domain.NewAnalysisContext(result), useCase.cacheTTL)
 
 	return result, nil
+}
+
+func selectAnalysisTraceID(current string, evidence []domain.Evidence) string {
+	if cleaned := strings.TrimSpace(current); cleaned != "" {
+		return cleaned
+	}
+	for _, item := range evidence {
+		if item.Signal != domain.SignalTraces {
+			continue
+		}
+		if traceID := strings.TrimSpace(item.Attributes["traceId"]); traceID != "" {
+			return traceID
+		}
+	}
+	for _, item := range evidence {
+		if traceID := strings.TrimSpace(item.Attributes["traceId"]); traceID != "" {
+			return traceID
+		}
+	}
+	return ""
 }
 
 func report(reporter phaseReporter, phase domain.JobPhase, progressPercent int) {

@@ -33,6 +33,7 @@ func (repository *UserRepository) Create(_ context.Context, user domain.User) er
 		}
 	}
 	user.Email = normalized
+	user.Name = strings.TrimSpace(user.Name)
 	user.Preferences = domain.NormalizeUserPreferences(user.Preferences)
 	repository.users[user.ID] = user
 	return nil
@@ -88,8 +89,8 @@ func (repository *UserRepository) Count(_ context.Context) (int64, error) {
 	return int64(len(repository.users)), nil
 }
 
-// UpdateProfile updates the email and updatedAt timestamp.
-func (repository *UserRepository) UpdateProfile(_ context.Context, id string, email string, updatedAt time.Time) error {
+// UpdateProfile updates profile fields and the updatedAt timestamp.
+func (repository *UserRepository) UpdateProfile(_ context.Context, id string, name string, email string, updatedAt time.Time) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	user, ok := repository.users[id]
@@ -105,6 +106,7 @@ func (repository *UserRepository) UpdateProfile(_ context.Context, id string, em
 			return domain.ErrUserAlreadyExists
 		}
 	}
+	user.Name = strings.TrimSpace(name)
 	user.Email = normalized
 	user.UpdatedAt = updatedAt
 	repository.users[id] = user

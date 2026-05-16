@@ -11,7 +11,7 @@ import (
 )
 
 // ErrSetupAlreadyCompleted indicates the bootstrap admin endpoint was
-// invoked after the initial admin user was already provisioned.
+// invoked after every setup prerequisite was configured.
 var ErrSetupAlreadyCompleted = errors.New("setup already completed")
 
 // SetupState describes the operator-facing installation state.
@@ -35,6 +35,13 @@ type SetupStatus struct {
 	ObservabilityConfigured bool
 	SetupCompleted          bool
 	State                   SetupState
+}
+
+// BootstrapAdminRequest carries the first-run admin creation payload.
+type BootstrapAdminRequest struct {
+	Name     string
+	Email    string
+	Password string
 }
 
 // Setup orchestrates the first-run installation flow.
@@ -81,21 +88,34 @@ func (useCase *Setup) Status(ctx context.Context) (SetupStatus, error) {
 	return status, nil
 }
 
-// BootstrapAdmin creates the initial admin user. The call is rejected with
-// ErrSetupAlreadyCompleted when any user already exists so the public
-// endpoint cannot be used to add admins after installation.
+// BootstrapAdmin creates an admin user while installation is open. The call
+// is rejected with ErrSetupAlreadyCompleted once every setup prerequisite is
+// configured.
 func (useCase *Setup) BootstrapAdmin(ctx context.Context, email, password string) (domain.User, error) {
-	count, err := useCase.users.Count(ctx)
+	return useCase.BootstrapAdminWithOptions(ctx, BootstrapAdminRequest{
+		Email:    email,
+		Password: password,
+	})
+}
+
+// BootstrapAdminWithOptions creates an admin user with profile data.
+func (useCase *Setup) BootstrapAdminWithOptions(ctx context.Context, request BootstrapAdminRequest) (domain.User, error) {
+	status, err := useCase.Status(ctx)
 	if err != nil {
-		return domain.User{}, fmt.Errorf("count users: %w", err)
+		return domain.User{}, err
 	}
-	if count > 0 {
+	if status.SetupCompleted {
 		return domain.User{}, ErrSetupAlreadyCompleted
 	}
 	if useCase.userAdmin == nil {
 		return domain.User{}, fmt.Errorf("setup: user use case not configured")
 	}
-	user, err := useCase.userAdmin.Create(ctx, email, password, domain.RoleAdmin)
+	user, err := useCase.userAdmin.CreateWithOptions(ctx, UserCreateRequest{
+		Name:     request.Name,
+		Email:    request.Email,
+		Password: request.Password,
+		Role:     domain.RoleAdmin,
+	})
 	if err != nil {
 		return domain.User{}, err
 	}

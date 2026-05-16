@@ -20,6 +20,7 @@ type SetupStatusResponseDto struct {
 
 // BootstrapAdminRequestDto is the payload accepted by POST /v1/setup/admin.
 type BootstrapAdminRequestDto struct {
+	Name     string `json:"name,omitempty"`
 	Email    string `json:"email" validate:"required,email"`
 	Password string `json:"password" validate:"required,min=8"`
 }
@@ -60,7 +61,11 @@ func (router *Router) handleBootstrapAdmin(writer stdhttp.ResponseWriter, reques
 		return
 	}
 
-	user, err := router.setup.BootstrapAdmin(request.Context(), dto.Email, dto.Password)
+	user, err := router.setup.BootstrapAdminWithOptions(request.Context(), usecase.BootstrapAdminRequest{
+		Name:     dto.Name,
+		Email:    dto.Email,
+		Password: dto.Password,
+	})
 	defer func() {
 		if user.ID != "" {
 			AnnotateAudit(request, AuditAnnotation{
@@ -73,7 +78,10 @@ func (router *Router) handleBootstrapAdmin(writer stdhttp.ResponseWriter, reques
 	}()
 	if err != nil {
 		if errors.Is(err, usecase.ErrSetupAlreadyCompleted) {
-			router.writeError(writer, requestID, startedAt, stdhttp.StatusConflict, "setup_already_completed", "initial admin already provisioned")
+			if router.tryBootstrapAdminLogin(writer, request, requestID, startedAt, dto) {
+				return
+			}
+			router.writeError(writer, requestID, startedAt, stdhttp.StatusConflict, "setup_already_completed", "setup is already completed; sign in with an admin account to manage users")
 			return
 		}
 		if errors.Is(err, domain.ErrInvalidUser) {
@@ -81,11 +89,41 @@ func (router *Router) handleBootstrapAdmin(writer stdhttp.ResponseWriter, reques
 			return
 		}
 		if errors.Is(err, domain.ErrUserAlreadyExists) {
+			if router.tryBootstrapAdminLogin(writer, request, requestID, startedAt, dto) {
+				return
+			}
 			router.writeError(writer, requestID, startedAt, stdhttp.StatusConflict, "user_already_exists", "email is already registered")
 			return
 		}
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, toUserResponseDto(user))
+	if router.sessions == nil {
+		router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, router.toUserResponseDto(user))
+		return
+	}
+	session, err := router.sessions.StartSessionForUser(request.Context(), user)
+	if err != nil {
+		router.writeDomainError(writer, requestID, startedAt, err)
+		return
+	}
+	router.writeSessionResponse(writer, requestID, startedAt, stdhttp.StatusCreated, session)
+}
+
+func (router *Router) tryBootstrapAdminLogin(writer stdhttp.ResponseWriter, request *stdhttp.Request, requestID string, startedAt time.Time, dto BootstrapAdminRequestDto) bool {
+	if router.sessions == nil {
+		return false
+	}
+	session, err := router.sessions.Login(request.Context(), dto.Email, dto.Password)
+	if err != nil || session.User.Role != domain.RoleAdmin {
+		return false
+	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "auth.login",
+		ResourceType: "user",
+		ResourceID:   session.User.ID,
+		Metadata:     map[string]string{"email": session.User.Email},
+	})
+	router.writeSessionResponse(writer, requestID, startedAt, stdhttp.StatusOK, session)
+	return true
 }

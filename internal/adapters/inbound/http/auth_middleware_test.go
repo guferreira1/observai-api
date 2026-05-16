@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/guferreira1/observai-api/internal/core/domain"
 )
 
 func TestAuthMiddlewareAllowsRequestWithValidBearerToken(t *testing.T) {
@@ -59,6 +61,21 @@ func TestAuthMiddlewareIsNoopWhenNoKeysConfigured(t *testing.T) {
 
 	if !called || response.Code != http.StatusOK {
 		t.Fatalf("expected handler to be invoked with 200 when auth disabled")
+	}
+}
+
+func TestAuthMiddlewareDoesNotGrantAdminWhenNoCredentialSourceExists(t *testing.T) {
+	adminHandler := RequireRole(domain.RoleAdmin)(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := authMiddleware(AuthConfig{}, nil)(http.HandlerFunc(adminHandler))
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/admin/users", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", response.Code)
 	}
 }
 

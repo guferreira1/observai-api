@@ -36,6 +36,7 @@ type LoginRequestDto struct {
 
 // UpdateProfileRequestDto is the payload accepted by PATCH /v1/me.
 type UpdateProfileRequestDto struct {
+	Name  string `json:"name,omitempty"`
 	Email string `json:"email" validate:"required,email"`
 }
 
@@ -55,6 +56,7 @@ type ChangePasswordRequestDto struct {
 
 // CreateUserRequestDto is the payload accepted by POST /v1/admin/users.
 type CreateUserRequestDto struct {
+	Name               string `json:"name,omitempty"`
 	Email              string `json:"email" validate:"required,email"`
 	Password           string `json:"password" validate:"required,min=8"`
 	Role               string `json:"role" validate:"required,oneof=admin operator viewer"`
@@ -71,6 +73,7 @@ type UpdateUserRequestDto struct {
 // UserResponseDto is the public projection of a domain.User.
 type UserResponseDto struct {
 	ID                 string         `json:"id"`
+	Name               string         `json:"name"`
 	Email              string         `json:"email"`
 	Role               string         `json:"role"`
 	IsActive           bool           `json:"isActive"`
@@ -118,22 +121,31 @@ type SessionResponseDto struct {
 	ExpiresAt string          `json:"expiresAt"`
 }
 
-func toUserResponseDto(user domain.User) UserResponseDto {
+func (router *Router) toUserResponseDto(user domain.User) UserResponseDto {
 	dto := UserResponseDto{
 		ID:                 user.ID,
+		Name:               userResponseName(user),
 		Email:              user.Email,
 		Role:               string(user.Role),
 		IsActive:           user.IsActive,
 		MustChangePassword: user.MustChangePassword,
 		Preferences:        toPreferencesDto(user.Preferences),
-		CreatedAt:          user.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:          user.UpdatedAt.Format(time.RFC3339),
+		CreatedAt:          router.formatTime(user.CreatedAt),
+		UpdatedAt:          router.formatTime(user.UpdatedAt),
 	}
 	if user.LastLoginAt != nil {
-		last := user.LastLoginAt.Format(time.RFC3339)
+		last := router.formatTime(*user.LastLoginAt)
 		dto.LastLoginAt = &last
 	}
 	return dto
+}
+
+func userResponseName(user domain.User) string {
+	name := strings.TrimSpace(user.Name)
+	if name != "" {
+		return name
+	}
+	return user.Email
 }
 
 func toPreferencesDto(preferences domain.UserPreferences) PreferencesDto {
@@ -190,18 +202,7 @@ func (router *Router) handleLogin(writer stdhttp.ResponseWriter, request *stdhtt
 		Metadata:     map[string]string{"email": session.User.Email},
 	})
 
-	csrf, err := generateCSRFToken()
-	if err != nil {
-		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
-		return
-	}
-
-	router.setSessionCookies(writer, session, csrf)
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, SessionResponseDto{
-		User:      toUserResponseDto(session.User),
-		CSRFToken: csrf,
-		ExpiresAt: session.Access.ExpiresAt.Format(time.RFC3339),
-	})
+	router.writeSessionResponse(writer, requestID, startedAt, stdhttp.StatusOK, session)
 }
 
 func (router *Router) handleLogout(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -233,18 +234,7 @@ func (router *Router) handleRefresh(writer stdhttp.ResponseWriter, request *stdh
 		return
 	}
 
-	csrf, err := generateCSRFToken()
-	if err != nil {
-		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
-		return
-	}
-
-	router.setSessionCookies(writer, session, csrf)
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, SessionResponseDto{
-		User:      toUserResponseDto(session.User),
-		CSRFToken: csrf,
-		ExpiresAt: session.Access.ExpiresAt.Format(time.RFC3339),
-	})
+	router.writeSessionResponse(writer, requestID, startedAt, stdhttp.StatusOK, session)
 }
 
 func (router *Router) handleMe(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -261,7 +251,7 @@ func (router *Router) handleMe(writer stdhttp.ResponseWriter, request *stdhttp.R
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toUserResponseDto(user))
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, router.toUserResponseDto(user))
 }
 
 func (router *Router) handleUpdateMe(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -284,12 +274,15 @@ func (router *Router) handleUpdateMe(writer stdhttp.ResponseWriter, request *std
 		return
 	}
 
-	user, err := router.sessions.UpdateProfile(request.Context(), principal.UserID, dto.Email)
+	user, err := router.sessions.UpdateProfileWithOptions(request.Context(), principal.UserID, usecase.UserProfileUpdateRequest{
+		Name:  dto.Name,
+		Email: dto.Email,
+	})
 	if err != nil {
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toUserResponseDto(user))
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, router.toUserResponseDto(user))
 }
 
 func (router *Router) handleChangePassword(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -450,7 +443,7 @@ func (router *Router) handleListUsers(writer stdhttp.ResponseWriter, request *st
 	}
 	items := make([]UserResponseDto, 0, len(users))
 	for _, user := range users {
-		items = append(items, toUserResponseDto(user))
+		items = append(items, router.toUserResponseDto(user))
 	}
 	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, items)
 }
@@ -470,6 +463,7 @@ func (router *Router) handleCreateUser(writer stdhttp.ResponseWriter, request *s
 	}
 
 	user, err := router.users.CreateWithOptions(request.Context(), usecase.UserCreateRequest{
+		Name:               dto.Name,
 		Email:              dto.Email,
 		Password:           dto.Password,
 		Role:               domain.Role(dto.Role),
@@ -485,7 +479,7 @@ func (router *Router) handleCreateUser(writer stdhttp.ResponseWriter, request *s
 		ResourceID:   user.ID,
 		Metadata:     map[string]string{"email": user.Email, "role": string(user.Role)},
 	})
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, toUserResponseDto(user))
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, router.toUserResponseDto(user))
 }
 
 func (router *Router) handleGetUser(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -497,7 +491,7 @@ func (router *Router) handleGetUser(writer stdhttp.ResponseWriter, request *stdh
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toUserResponseDto(user))
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, router.toUserResponseDto(user))
 }
 
 func (router *Router) handleUpdateUser(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -526,7 +520,7 @@ func (router *Router) handleUpdateUser(writer stdhttp.ResponseWriter, request *s
 		ResourceID:   updated.ID,
 		Metadata:     map[string]string{"role": string(updated.Role), "isActive": formatBool(updated.IsActive)},
 	})
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, toUserResponseDto(updated))
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, router.toUserResponseDto(updated))
 }
 
 func (router *Router) applyUserUpdate(request *stdhttp.Request, id string, dto UpdateUserRequestDto) (domain.User, error) {
@@ -602,6 +596,20 @@ func (router *Router) setSessionCookies(writer stdhttp.ResponseWriter, session u
 		HttpOnly: false,
 		Secure:   cookieConfig.Secure,
 		SameSite: cookieConfig.sameSite(),
+	})
+}
+
+func (router *Router) writeSessionResponse(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, status int, session usecase.AuthSession) {
+	csrf, err := generateCSRFToken()
+	if err != nil {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
+		return
+	}
+	router.setSessionCookies(writer, session, csrf)
+	router.writeSuccess(writer, requestID, startedAt, status, SessionResponseDto{
+		User:      router.toUserResponseDto(session.User),
+		CSRFToken: csrf,
+		ExpiresAt: router.formatTime(session.Access.ExpiresAt),
 	})
 }
 

@@ -89,6 +89,14 @@ type Trace struct {
 	Processes map[string]Process
 }
 
+// TraceSearchRequest describes a Jaeger trace search by service and time range.
+type TraceSearchRequest struct {
+	Service string
+	Start   time.Time
+	End     time.Time
+	Limit   int
+}
+
 // Process is a Jaeger process (service entry).
 type Process struct {
 	ServiceName string
@@ -181,6 +189,50 @@ func (client *Client) FetchTrace(ctx context.Context, traceID string) (trace Tra
 	return trace, err
 }
 
+// SearchTraces returns traces matching the supplied service and time range.
+func (client *Client) SearchTraces(ctx context.Context, search TraceSearchRequest) (traces []Trace, err error) {
+	startedAt := time.Now()
+	defer func() { client.observer.Observe("jaeger", "search_traces", time.Since(startedAt), err) }()
+
+	service := strings.TrimSpace(search.Service)
+	if service == "" {
+		return nil, fmt.Errorf("jaeger trace search requires a service")
+	}
+
+	limit := search.Limit
+	if limit <= 0 {
+		limit = 5
+	}
+
+	end := search.End
+	if end.IsZero() {
+		end = time.Now().UTC()
+	}
+	start := search.Start
+	if start.IsZero() {
+		start = end.Add(-1 * time.Hour)
+	}
+
+	endpoint := *client.baseURL
+	endpoint.Path = joinPath(endpoint.Path, "/api/traces")
+	query := endpoint.Query()
+	query.Set("service", service)
+	query.Set("start", microseconds(start))
+	query.Set("end", microseconds(end))
+	query.Set("limit", fmt.Sprintf("%d", limit))
+	endpoint.RawQuery = query.Encode()
+
+	err = retry.Do(ctx, client.retryPolicy, isRetryable, func(int) error {
+		fetched, attemptErr := client.executeSearch(ctx, endpoint.String())
+		if attemptErr != nil {
+			return attemptErr
+		}
+		traces = fetched
+		return nil
+	})
+	return traces, err
+}
+
 func (client *Client) executeFetch(ctx context.Context, endpoint string) (Trace, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -209,30 +261,73 @@ func (client *Client) executeFetch(ctx context.Context, endpoint string) (Trace,
 		return Trace{}, fmt.Errorf("jaeger status %d: %s", response.StatusCode, truncate(string(body), 200))
 	}
 
-	var parsed tracesResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return Trace{}, fmt.Errorf("decode jaeger response: %w", err)
+	traces, err := decodeTracesResponse(body)
+	if err != nil {
+		return Trace{}, err
 	}
-	if len(parsed.Errors) > 0 {
-		return Trace{}, fmt.Errorf("jaeger error: %s", parsed.Errors[0].Message)
-	}
-	if len(parsed.Data) == 0 {
+	if len(traces) == 0 {
 		return Trace{}, fmt.Errorf("jaeger returned no traces")
 	}
+	return traces[0], nil
+}
 
-	entry := parsed.Data[0]
-	trace := Trace{
-		TraceID:   entry.TraceID,
-		Spans:     make([]Span, 0, len(entry.Spans)),
-		Processes: make(map[string]Process, len(entry.Processes)),
+func (client *Client) executeSearch(ctx context.Context, endpoint string) ([]Trace, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build jaeger search request: %w", err)
 	}
-	for processID, process := range entry.Processes {
+	request.Header.Set("Accept", "application/json")
+
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return nil, &transientError{err: fmt.Errorf("call jaeger search: %w", err)}
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, &transientError{err: fmt.Errorf("read jaeger search response: %w", err)}
+	}
+
+	if response.StatusCode >= http.StatusInternalServerError {
+		return nil, &transientError{err: fmt.Errorf("jaeger search status %d: %s", response.StatusCode, truncate(string(body), 200))}
+	}
+	if response.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("jaeger search status %d: %s", response.StatusCode, truncate(string(body), 200))
+	}
+
+	return decodeTracesResponse(body)
+}
+
+func decodeTracesResponse(body []byte) ([]Trace, error) {
+	var parsed tracesResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode jaeger response: %w", err)
+	}
+	if len(parsed.Errors) > 0 {
+		return nil, fmt.Errorf("jaeger error: %s", parsed.Errors[0].Message)
+	}
+
+	traces := make([]Trace, 0, len(parsed.Data))
+	for _, entry := range parsed.Data {
+		traces = append(traces, decodeTraceEntry(entry.TraceID, entry.Spans, entry.Processes))
+	}
+	return traces, nil
+}
+
+func decodeTraceEntry(traceID string, spans []rawSpan, processes map[string]rawProcess) Trace {
+	trace := Trace{
+		TraceID:   traceID,
+		Spans:     make([]Span, 0, len(spans)),
+		Processes: make(map[string]Process, len(processes)),
+	}
+	for processID, process := range processes {
 		trace.Processes[processID] = Process{
 			ServiceName: process.ServiceName,
 			Tags:        keyValueMap(process.Tags),
 		}
 	}
-	for _, raw := range entry.Spans {
+	for _, raw := range spans {
 		trace.Spans = append(trace.Spans, Span{
 			TraceID:       raw.TraceID,
 			SpanID:        raw.SpanID,
@@ -244,7 +339,11 @@ func (client *Client) executeFetch(ctx context.Context, endpoint string) (Trace,
 			Tags:          keyValueMap(raw.Tags),
 		})
 	}
-	return trace, nil
+	return trace
+}
+
+func microseconds(value time.Time) string {
+	return fmt.Sprintf("%d", value.UTC().UnixNano()/int64(time.Microsecond))
 }
 
 func parentSpanID(references []rawReference) string {

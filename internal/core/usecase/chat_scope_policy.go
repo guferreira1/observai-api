@@ -3,13 +3,27 @@ package usecase
 import "strings"
 
 type chatScopePolicy interface {
-	Allows(question string) bool
+	Evaluate(question string) chatScopeDecision
+}
+
+type chatScopeDecision int
+
+const (
+	chatScopeDenied chatScopeDecision = iota
+	chatScopeAllowed
+	chatScopeContextualFollowUp
+)
+
+func (decision chatScopeDecision) AllowsActiveAnalysis() bool {
+	return decision == chatScopeAllowed || decision == chatScopeContextualFollowUp
 }
 
 type compositeChatScopePolicy struct {
-	allowed   []string
-	refusal   []string
-	minLength int
+	allowed         []string
+	contextual      []string
+	exactContextual []string
+	refusal         []string
+	minLength       int
 }
 
 func defaultChatScopePolicy() chatScopePolicy {
@@ -63,6 +77,68 @@ func defaultChatScopePolicy() chatScopePolicy {
 			"finding",
 			"observation",
 		},
+		contextual: []string{
+			"e agora",
+			"agora o que",
+			"o que faço",
+			"o que faco",
+			"o que eu faço",
+			"o que eu faco",
+			"o que fazer",
+			"como resolver",
+			"como resolvo",
+			"como corrigir",
+			"como corrijo",
+			"como mitigar",
+			"como investigar",
+			"por que isso",
+			"por quê isso",
+			"me explica",
+			"explique melhor",
+			"explica melhor",
+			"detalhe",
+			"detalhar",
+			"continua",
+			"continue",
+			"próximo passo",
+			"proximo passo",
+			"próximos passos",
+			"proximos passos",
+			"isso é grave",
+			"isso e grave",
+			"qual prioridade",
+			"qual o impacto",
+			"tem risco",
+			"devo",
+			"what now",
+			"what should i do",
+			"what do i do",
+			"next step",
+			"next steps",
+			"how to fix",
+			"how do i fix",
+			"how to solve",
+			"how should i solve",
+			"how to mitigate",
+			"how to investigate",
+			"why is that",
+			"why did it",
+			"explain better",
+			"explain this",
+			"tell me more",
+			"go on",
+			"is this critical",
+			"is this serious",
+			"what is the impact",
+			"should i",
+		},
+		exactContextual: []string{
+			"por que",
+			"por quê",
+			"porque",
+			"pq",
+			"why",
+		},
 		refusal: []string{
 			"ignore previous",
 			"ignore the previous",
@@ -99,23 +175,36 @@ func defaultChatScopePolicy() chatScopePolicy {
 	}
 }
 
-func (policy compositeChatScopePolicy) Allows(question string) bool {
+func (policy compositeChatScopePolicy) Evaluate(question string) chatScopeDecision {
 	normalized := strings.ToLower(strings.TrimSpace(question))
 	if len(normalized) < policy.minLength {
-		return false
+		return chatScopeDenied
 	}
 
 	for _, pattern := range policy.refusal {
 		if strings.Contains(normalized, pattern) {
-			return false
+			return chatScopeDenied
 		}
 	}
 
 	for _, keyword := range policy.allowed {
 		if strings.Contains(normalized, keyword) {
-			return true
+			return chatScopeAllowed
 		}
 	}
 
-	return false
+	cleaned := strings.Trim(normalized, " \t\n\r?!.,;:")
+	for _, pattern := range policy.exactContextual {
+		if cleaned == pattern {
+			return chatScopeContextualFollowUp
+		}
+	}
+
+	for _, pattern := range policy.contextual {
+		if strings.Contains(normalized, pattern) {
+			return chatScopeContextualFollowUp
+		}
+	}
+
+	return chatScopeDenied
 }

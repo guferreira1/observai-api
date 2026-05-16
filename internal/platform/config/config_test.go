@@ -19,6 +19,7 @@ func TestLoadReadsDefaultsFromEnvironment(t *testing.T) {
 	assert.Equal(t, "8080", cfg.Port)
 	assert.Equal(t, "local", cfg.Env)
 	assert.Equal(t, ModeLocal, cfg.Mode)
+	assert.Equal(t, "Local", cfg.TimeZone)
 	assert.Empty(t, cfg.DatabaseDSN)
 	assert.Empty(t, cfg.RedisURL)
 	assert.Equal(t, 6*time.Hour, cfg.AnalysisContextCacheTTL)
@@ -28,6 +29,53 @@ func TestLoadReadsDefaultsFromEnvironment(t *testing.T) {
 	assert.Equal(t, 30*time.Second, cfg.Ollama.Timeout)
 	assert.Equal(t, 10*time.Second, cfg.Prometheus.Timeout)
 	assert.Equal(t, "agents", cfg.Prompts.Dir)
+}
+
+func TestLoadReadsDotEnvFromWorkingDirectory(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	tempDir := t.TempDir()
+	currentDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(tempDir))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(currentDir))
+	})
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, ".env"), []byte(`
+OBSERVAI_API_PORT=18080
+OBSERVAI_DATABASE_DSN=postgres://from-dotenv
+OBSERVAI_JWT_SECRET=0123456789abcdef0123456789abcdef
+`), 0o600))
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "18080", cfg.Port)
+	assert.Equal(t, "postgres://from-dotenv", cfg.DatabaseDSN)
+	assert.Equal(t, "0123456789abcdef0123456789abcdef", cfg.JWT.Secret)
+}
+
+func TestLoadDoesNotLetDotEnvOverrideExistingEnvironment(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	tempDir := t.TempDir()
+	currentDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(tempDir))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(currentDir))
+	})
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, ".env"), []byte(`
+OBSERVAI_API_PORT=18080
+OBSERVAI_DATABASE_DSN=postgres://from-dotenv
+`), 0o600))
+	t.Setenv("OBSERVAI_API_PORT", "19090")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "19090", cfg.Port)
+	assert.Equal(t, "postgres://from-dotenv", cfg.DatabaseDSN)
 }
 
 func TestLoadReadsYAMLAndAllowsEnvOverride(t *testing.T) {
@@ -52,6 +100,7 @@ ollama:
   timeout: 20s
 prompts:
   dir: agents
+timezone: America/Sao_Paulo
 `), 0o600))
 
 	t.Setenv("OBSERVAI_CONFIG_FILE", configPath)
@@ -69,6 +118,7 @@ prompts:
 	assert.Equal(t, "redis://from-file", cfg.RedisURL)
 	assert.Equal(t, 2*time.Hour, cfg.AnalysisContextCacheTTL)
 	assert.Equal(t, 45*time.Second, cfg.HTTPRequestTimeout)
+	assert.Equal(t, "America/Sao_Paulo", cfg.TimeZone)
 	assert.Equal(t, int64(2097152), cfg.HTTPMaxBodyBytes)
 	assert.Equal(t, "http://prometheus:9090", cfg.Prometheus.URL)
 	assert.Equal(t, 5*time.Second, cfg.Prometheus.Timeout)
@@ -132,6 +182,16 @@ func TestLoadRejectsShortJWTSecret(t *testing.T) {
 	assert.Contains(t, err.Error(), "OBSERVAI_JWT_SECRET")
 }
 
+func TestLoadRejectsInvalidTimezone(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	t.Setenv("OBSERVAI_TIMEZONE", "Mars/Phobos")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OBSERVAI_TIMEZONE")
+}
+
 func TestLoadDevAcceptsEncryptionKey(t *testing.T) {
 	unsetEnv(t, allConfigEnvKeys()...)
 
@@ -163,6 +223,26 @@ func TestLoadLocalDoesNotRequireEncryptionKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ModeLocal, cfg.Mode)
 	assert.Empty(t, cfg.EncryptionKey)
+}
+
+func TestLoadLocalRejectsMalformedEncryptionKeyWhenProvided(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	t.Setenv("OBSERVAI_ENCRYPTION_KEY", "not-a-real-key")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OBSERVAI_ENCRYPTION_KEY")
+}
+
+func TestLoadLocalRejectsShortJWTSecretWhenProvided(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	t.Setenv("OBSERVAI_JWT_SECRET", "short")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OBSERVAI_JWT_SECRET")
 }
 
 func TestLoadMigratesLegacyPrometheusAndOllamaIntoProviderLists(t *testing.T) {
@@ -267,6 +347,7 @@ func allConfigEnvKeys() []string {
 		"OBSERVAI_API_PORT",
 		"OBSERVAI_ENV",
 		"OBSERVAI_MODE",
+		"OBSERVAI_TIMEZONE",
 		"OBSERVAI_DATABASE_DSN",
 		"OBSERVAI_REDIS_URL",
 		"OBSERVAI_ANALYSIS_CONTEXT_CACHE_TTL",

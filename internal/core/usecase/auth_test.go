@@ -65,6 +65,7 @@ func seedAdminUser(t *testing.T, users *inmemory.UserRepository) domain.User {
 	}
 	user := domain.User{
 		ID:           "user-1",
+		Name:         "Admin User",
 		Email:        "admin@observai.io",
 		PasswordHash: hash,
 		Role:         domain.RoleAdmin,
@@ -234,5 +235,20 @@ func TestAuthUpdateProfileValidatesEmail(t *testing.T) {
 	_, err := auth.UpdateProfile(context.Background(), "user-1", "")
 	if !errors.Is(err, domain.ErrInvalidUser) {
 		t.Fatalf("expected ErrInvalidUser for empty email, got %v", err)
+	}
+}
+
+func TestAuthUpdateProfileUpdatesName(t *testing.T) {
+	auth, users, _, _, _ := newAuthFixture(t)
+	seedAdminUser(t, users)
+	user, err := auth.UpdateProfileWithOptions(context.Background(), "user-1", UserProfileUpdateRequest{
+		Name:  "Gustavo Ferreira",
+		Email: "admin@observai.io",
+	})
+	if err != nil {
+		t.Fatalf("update profile: %v", err)
+	}
+	if user.Name != "Gustavo Ferreira" {
+		t.Fatalf("expected updated name, got %q", user.Name)
 	}
 }
