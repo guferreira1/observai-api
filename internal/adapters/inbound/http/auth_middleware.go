@@ -374,10 +374,6 @@ func writeUnauthorized(writer stdhttp.ResponseWriter, request *stdhttp.Request, 
 	writeAuthFailure(writer, request, provider, stdhttp.StatusUnauthorized, "unauthorized", "missing or invalid credentials", "http.auth", nil)
 }
 
-func writeForbidden(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider) {
-	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges", "http.authorization", nil)
-}
-
 func writeRoleForbidden(writer stdhttp.ResponseWriter, request *stdhttp.Request, provider providerSummaryProvider, roles []domain.Role) {
 	writeAuthFailure(writer, request, provider, stdhttp.StatusForbidden, "forbidden", "insufficient privileges", "http.authorization", []ErrorFieldDetail{{
 		Field:   "role",

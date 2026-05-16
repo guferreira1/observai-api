@@ -302,32 +302,6 @@ cp .env.example .env
 go tool air
 ```
 
----
-
-## Run with Docker Compose
-
-```bash
-docker compose up -d
-```
-
-API:
-
-```txt
-http://localhost:8080
-```
-
-Swagger UI:
-
-```txt
-http://localhost:8080/docs
-http://localhost:8080/swagger
-```
-
-Health check:
-
-```txt
-http://localhost:8080/health
-```
 
 ---
 
@@ -343,7 +317,13 @@ SQL queries prepared for sqlc live under `internal/adapters/outbound/postgres/qu
 
 ---
 
-## Example Docker Compose
+## Container deployment sketch
+
+The repository intentionally does not ship a root `docker-compose.yml`.
+Deployment topology depends on the operator's database, cache, observability
+providers, LLM providers, ingress and secret-management choices. The snippet
+below is only a minimal container wiring reference for the API plus its core
+Postgres/Redis dependencies.
 
 ```yaml
 services:
