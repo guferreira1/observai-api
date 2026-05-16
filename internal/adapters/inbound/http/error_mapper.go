@@ -85,14 +85,6 @@ var domainErrorRules = []domainErrorRule{
 		},
 	},
 	{
-		match: func(err error) bool { return errors.Is(err, domain.ErrQuestionOutOfScope) },
-		response: httpErrorResponse{
-			status:  stdhttp.StatusBadRequest,
-			code:    "question_out_of_scope",
-			message: "I can only answer questions about the active ObservAI analysis. Ask about the evidence, hypotheses, affected services or recommended investigation steps.",
-		},
-	},
-	{
 		match: func(err error) bool { return errors.Is(err, domain.ErrAnalysisNotFound) },
 		response: httpErrorResponse{
 			status:  stdhttp.StatusNotFound,

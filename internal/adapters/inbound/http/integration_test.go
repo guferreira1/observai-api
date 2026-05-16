@@ -148,17 +148,17 @@ func TestAnalysisChatEndToEnd_Integration(t *testing.T) {
 		assert.Equal(t, "assistant", second["role"])
 	})
 
-	t.Run("POST /v1/analyses/{id}/chat rejects out-of-scope questions", func(t *testing.T) {
+	t.Run("POST /v1/analyses/{id}/chat answers out-of-scope questions", func(t *testing.T) {
 		require.NotEmpty(t, createdID)
 
 		body := []byte(`{"question": "Can you write a Python script to scrape Wikipedia?"}`)
 		response := postJSON(t, client, baseURL+"/v1/analyses/"+createdID+"/chat", body)
 		defer response.Body.Close()
 
-		require.Equal(t, stdhttp.StatusBadRequest, response.StatusCode)
+		require.Equal(t, stdhttp.StatusOK, response.StatusCode)
 		payload := decodeWrapper(t, response)
 		data := payload["data"].(map[string]any)
-		assert.Equal(t, "question_out_of_scope", data["code"])
+		assert.Contains(t, data["answer"], "I can only answer questions about the active ObservAI analysis")
 	})
 }
 

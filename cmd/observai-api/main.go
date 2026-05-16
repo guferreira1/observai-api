@@ -87,8 +87,32 @@ func main() {
 
 	ids := uuidadapter.NewIDGenerator()
 
+	var (
+		providerConfigUseCase *usecase.ProviderConfig
+		llmConfigUseCase      *usecase.LLMConfig
+	)
+	if store.providerConfigs != nil && store.llmConfigs != nil {
+		cipher, cipherErr := buildEncryptionCipher(cfg, log)
+		if cipherErr != nil {
+			log.Error("encryption cipher initialization failed", "error", cipherErr)
+			os.Exit(1)
+		}
+		tester := providertest.New()
+		providerConfigUseCase = usecase.NewProviderConfig(store.providerConfigs, cipher, tester, ids)
+		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, ids)
+	}
+
 	credentialStore := credentials.NewDispatcher()
-	providers, err := newProviders(cfg, log, providerMetrics, credentialStore)
+	runtimeProviderCtx, runtimeProviderCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	runtimeProviderConfig, loadedRuntimeProviderConfig := initialRuntimeProviderConfig(runtimeProviderCtx, cfg, log, providerConfigUseCase, llmConfigUseCase)
+	runtimeProviderCancel()
+
+	providers, err := newProviders(runtimeProviderConfig, log, providerMetrics, credentialStore)
+	if err != nil && loadedRuntimeProviderConfig {
+		log.Warn("database-backed provider initialization failed; starting with bootstrap provider configuration", "error", err)
+		loadedRuntimeProviderConfig = false
+		providers, err = newProviders(cfg, log, providerMetrics, credentialStore)
+	}
 	if err != nil {
 		log.Error("provider initialization failed", "error", err)
 		os.Exit(1)
@@ -164,25 +188,14 @@ func main() {
 		analysisUseCase.WithCompletionNotifier(usecase.NewWebhookNotifier(webhookUseCase, log))
 	}
 
-	var (
-		providerConfigUseCase *usecase.ProviderConfig
-		llmConfigUseCase      *usecase.LLMConfig
-	)
 	if store.providerConfigs != nil && store.llmConfigs != nil {
-		cipher, cipherErr := buildEncryptionCipher(cfg, log)
-		if cipherErr != nil {
-			log.Error("encryption cipher initialization failed", "error", cipherErr)
-			os.Exit(1)
-		}
-		tester := providertest.New()
-		providerConfigUseCase = usecase.NewProviderConfig(store.providerConfigs, cipher, tester, ids)
-		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, ids)
-
 		reloadDeps := factoryDependencies(cfg, log, providerMetrics, credentialStore)
 		reload := newAdapterReloader(cfg, log, reloadDeps, registries, capabilities, providerConfigUseCase, llmConfigUseCase)
 		providerConfigUseCase.WithReloadHook(reload)
 		llmConfigUseCase.WithReloadHook(reload)
-		reload(context.Background())
+		if !loadedRuntimeProviderConfig {
+			reload(context.Background())
+		}
 	}
 
 	var setupUseCase *usecase.Setup

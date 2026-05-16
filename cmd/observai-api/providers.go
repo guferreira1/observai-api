@@ -202,6 +202,47 @@ func mergeDBLLMIntoConfig(cfg config.Config, active *domain.LLMConfig, plaintext
 	return merged
 }
 
+func initialRuntimeProviderConfig(ctx context.Context, cfg config.Config, log *slog.Logger, providerConfigs *usecase.ProviderConfig, llmConfigs *usecase.LLMConfig) (config.Config, bool) {
+	runtimeConfig, observabilityLoaded := initialObservabilityProviderConfig(ctx, cfg, log, providerConfigs)
+	runtimeConfig, llmLoaded := initialLLMProviderConfig(ctx, runtimeConfig, log, llmConfigs)
+	return runtimeConfig, observabilityLoaded || llmLoaded
+}
+
+func initialObservabilityProviderConfig(ctx context.Context, cfg config.Config, log *slog.Logger, providerConfigs *usecase.ProviderConfig) (config.Config, bool) {
+	if providerConfigs == nil {
+		return cfg, false
+	}
+	activeConfigs, err := providerConfigs.ListActiveConfigs(ctx)
+	if err != nil {
+		log.Warn("load active provider configurations failed", "error", err)
+		return cfg, false
+	}
+	if len(activeConfigs) == 0 {
+		return cfg, false
+	}
+	return mergeDBProvidersIntoConfig(cfg, activeConfigs, providerConfigs.DecryptCredentials), true
+}
+
+func initialLLMProviderConfig(ctx context.Context, cfg config.Config, log *slog.Logger, llmConfigs *usecase.LLMConfig) (config.Config, bool) {
+	if llmConfigs == nil {
+		return cfg, false
+	}
+	active, err := llmConfigs.FindActiveConfig(ctx)
+	if errors.Is(err, domain.ErrLLMConfigNotFound) {
+		return cfg, false
+	}
+	if err != nil {
+		log.Warn("load active llm provider configuration failed", "error", err)
+		return cfg, false
+	}
+	plaintextAPIKey, err := llmConfigs.DecryptAPIKey(active)
+	if err != nil {
+		log.Warn("decrypt active llm provider api key failed", "error", err)
+		return cfg, false
+	}
+	return mergeDBLLMIntoConfig(cfg, &active, plaintextAPIKey), true
+}
+
 func applyProviderCredentials(options map[string]string, providerType domain.ObservabilityProviderType, credentials string) {
 	if options == nil || credentials == "" {
 		return

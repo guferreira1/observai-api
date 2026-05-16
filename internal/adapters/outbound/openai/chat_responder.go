@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/llmguard"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/prompts"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 )
@@ -51,13 +52,20 @@ func (responder *ChatResponder) Answer(ctx context.Context, analysisCtx domain.A
 		return domain.ChatAnswer{}, fmt.Errorf("openai chat call: %w", err)
 	}
 
-	return decodeChatAnswerPayload(content, analysisCtx.AnalysisID)
+	return decodeChatAnswerPayload(content, analysisCtx)
 }
 
 func buildChatUserMessage(analysisCtx domain.AnalysisContext, question domain.ChatQuestion) (string, error) {
+	catalog := llmguard.NewEvidenceCatalog(analysisCtx.Evidence)
+	services := llmguard.NewServiceCatalog(analysisCtx.AffectedServices, analysisCtx.Evidence)
 	body := map[string]any{
-		"analysisContext": analysisCtx,
-		"question":        question.Question,
+		"analysisContext":       analysisCtx,
+		"question":              question.Question,
+		"responseLanguage":      llmguard.ResponseLanguage(question.Question, analysisCtx.Summary),
+		"validAffectedServices": services.Values(),
+		"validEvidenceNames":    catalog.Names(),
+		"validEvidenceIds":      catalog.IDs(),
+		"groundingRules":        llmguard.GroundingRules(),
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -65,12 +73,12 @@ func buildChatUserMessage(analysisCtx domain.AnalysisContext, question domain.Ch
 	}
 
 	var buffer strings.Builder
-	buffer.WriteString("Reply ONLY with JSON {\"answer\": string, \"evidence\": string[]}. Input:\n")
+	buffer.WriteString("Reply ONLY with JSON {\"answer\": string, \"evidence\": string[]}. Use responseLanguage for the answer. Input:\n")
 	buffer.Write(encoded)
 	return buffer.String(), nil
 }
 
-func decodeChatAnswerPayload(content string, analysisID string) (domain.ChatAnswer, error) {
+func decodeChatAnswerPayload(content string, analysisCtx domain.AnalysisContext) (domain.ChatAnswer, error) {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return domain.ChatAnswer{}, fmt.Errorf("openai returned empty chat answer")
@@ -84,9 +92,10 @@ func decodeChatAnswerPayload(content string, analysisID string) (domain.ChatAnsw
 		return domain.ChatAnswer{}, fmt.Errorf("openai chat answer is empty")
 	}
 
+	catalog := llmguard.NewEvidenceCatalog(analysisCtx.Evidence)
 	return domain.ChatAnswer{
-		AnalysisID: analysisID,
+		AnalysisID: analysisCtx.AnalysisID,
 		Answer:     payload.Answer,
-		Evidence:   payload.Evidence,
+		Evidence:   catalog.FilterNames(payload.Evidence),
 	}, nil
 }

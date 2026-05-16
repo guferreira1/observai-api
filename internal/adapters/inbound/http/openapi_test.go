@@ -34,7 +34,7 @@ func TestOpenAPIDocumentEmbeddedAtCompileTime(t *testing.T) {
 
 	document := OpenAPIDocument()
 	require.NotEmpty(t, document, "embedded OpenAPI document must not be empty")
-	assert.Contains(t, string(document), "question_out_of_scope")
+	assert.Contains(t, string(document), "Friendly refusal for a question unrelated to the analysis.")
 }
 
 func TestRouterServesSwaggerUI(t *testing.T) {

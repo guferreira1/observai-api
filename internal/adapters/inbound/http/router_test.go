@@ -535,10 +535,19 @@ func TestRouterReturnsNotFoundForMissingAnalysis(t *testing.T) {
 	assert.Equal(t, "analysis_not_found", payload.Data.Code)
 }
 
-func TestRouterRejectsOutOfScopeChatQuestion(t *testing.T) {
+func TestRouterAnswersOutOfScopeChatQuestion(t *testing.T) {
 	t.Parallel()
 
 	router := newTestRouter()
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"]
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
+
 	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses/analysis-000001/chat", bytes.NewBufferString(`{
 		"question": "What is the capital of France?"
 	}`))
@@ -546,11 +555,40 @@ func TestRouterRejectsOutOfScopeChatQuestion(t *testing.T) {
 
 	router.ServeHTTP(response, request)
 
-	require.Equal(t, stdhttp.StatusBadRequest, response.Code)
+	require.Equal(t, stdhttp.StatusOK, response.Code)
 
-	var payload WrapperDtoResponde[ErrorResponse]
+	var payload WrapperDtoResponde[ChatResponseDto]
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
-	assert.Equal(t, "question_out_of_scope", payload.Data.Code)
+	assert.Equal(t, "analysis-000001", payload.Data.AnalysisID)
+	assert.Contains(t, payload.Data.Answer, "I can only answer questions about the active ObservAI analysis")
+	assert.Empty(t, payload.Data.Evidence)
+}
+
+func TestRouterAcceptsContextualChatFollowUp(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter()
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses", bytes.NewBufferString(`{
+		"goal": "investigate checkout latency",
+		"timeWindow": {"start": "2026-05-12T10:00:00Z", "end": "2026-05-12T11:00:00Z"},
+		"affectedServices": ["checkout-service"]
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusAccepted, createResponse.Code)
+
+	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/analyses/analysis-000001/chat", bytes.NewBufferString(`{
+		"question": "E agora?"
+	}`))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusOK, response.Code)
+
+	var payload WrapperDtoResponde[ChatResponseDto]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, "analysis-000001", payload.Data.AnalysisID)
+	assert.NotEmpty(t, payload.Data.Answer)
 }
 
 func TestRouterReturnsPersistedChatHistory(t *testing.T) {

@@ -40,8 +40,13 @@ func TestAnalysisGeneratorDecodesStructuredResponse(t *testing.T) {
 		assert.Equal(t, "system", payload.Messages[0].Role)
 		assert.Equal(t, "system body", payload.Messages[0].Content)
 		assert.Contains(t, payload.Messages[1].Content, "checkout-service")
+		assert.Contains(t, payload.Messages[1].Content, `"responseLanguage":"English"`)
+		assert.Contains(t, payload.Messages[1].Content, `"validAffectedServices":["checkout-service"]`)
+		assert.Contains(t, payload.Messages[1].Content, `"validEvidenceNames":["p95_latency"]`)
+		assert.Contains(t, payload.Messages[1].Content, `"validEvidenceIds":["ev-1"]`)
+		assert.Contains(t, payload.Messages[1].Content, "Use only the normalized evidence")
 
-		_, _ = writer.Write([]byte(`{"message":{"role":"assistant","content":"{\"summary\":\"latency increased\",\"severity\":\"high\",\"confidence\":\"medium\",\"affectedServices\":[\"checkout-service\"],\"detectedAnomalies\":[\"p95 spike\"],\"possibleRootCauses\":[{\"cause\":\"db saturation\",\"evidence\":[\"p95_latency\"],\"confidence\":\"medium\"}],\"recommendedActions\":[{\"action\":\"scale db\",\"rationale\":\"reduce queue\",\"priority\":1}],\"codeLevelInsights\":[],\"missingEvidence\":[\"app logs\"]}"},"done":true}`))
+		_, _ = writer.Write([]byte(`{"message":{"role":"assistant","content":"{\"summary\":\"latency increased\",\"severity\":\"high\",\"confidence\":\"medium\",\"affectedServices\":[\"checkout-service\"],\"detectedAnomalies\":[\"p95 spike\"],\"possibleRootCauses\":[{\"cause\":\"db saturation\",\"evidence\":[\"p95_latency\"],\"confidence\":\"medium\"}],\"recommendedActions\":[{\"action\":\"scale db\",\"rationale\":\"reduce queue\",\"priority\":1,\"evidenceIds\":[\"ev-1\",\"invented\"]}],\"codeLevelInsights\":[],\"missingEvidence\":[\"app logs\"]}"},"done":true}`))
 	}))
 	defer server.Close()
 
@@ -52,7 +57,7 @@ func TestAnalysisGeneratorDecodesStructuredResponse(t *testing.T) {
 	result, err := generator.Generate(context.Background(), domain.AnalysisRequest{
 		Goal:             "investigate checkout latency",
 		AffectedServices: []string{"checkout-service"},
-	}, []domain.Evidence{{Name: "p95_latency", Service: "checkout-service"}})
+	}, []domain.Evidence{{ID: "ev-1", Name: "p95_latency", Service: "checkout-service"}})
 	require.NoError(t, err)
 
 	assert.Equal(t, domain.SeverityHigh, result.Severity)
@@ -61,13 +66,15 @@ func TestAnalysisGeneratorDecodesStructuredResponse(t *testing.T) {
 	assert.Equal(t, "db saturation", result.PossibleRootCauses[0].Cause)
 	require.Len(t, result.Evidence, 1)
 	assert.Equal(t, "p95_latency", result.Evidence[0].Name)
+	require.Len(t, result.RecommendedActions, 1)
+	assert.Equal(t, []string{"ev-1"}, result.RecommendedActions[0].EvidenceIDs)
 }
 
 func TestChatResponderDecodesStructuredResponse(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = writer.Write([]byte(`{"message":{"role":"assistant","content":"{\"answer\":\"db saturation\",\"evidence\":[\"p95_latency\"]}"},"done":true}`))
+		_, _ = writer.Write([]byte(`{"message":{"role":"assistant","content":"{\"answer\":\"db saturation\",\"evidence\":[\"p95_latency\",\"invented_metric\"]}"},"done":true}`))
 	}))
 	defer server.Close()
 
@@ -75,7 +82,10 @@ func TestChatResponderDecodesStructuredResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	responder := NewChatResponder(client, stubLoader{prompt: "chat system"})
-	answer, err := responder.Answer(context.Background(), domain.AnalysisContext{AnalysisID: "analysis-1"}, domain.ChatQuestion{
+	answer, err := responder.Answer(context.Background(), domain.AnalysisContext{
+		AnalysisID: "analysis-1",
+		Evidence:   []domain.Evidence{{Name: "p95_latency"}},
+	}, domain.ChatQuestion{
 		AnalysisID: "analysis-1",
 		Question:   "Which evidence supports the analysis?",
 	})
@@ -83,6 +93,35 @@ func TestChatResponderDecodesStructuredResponse(t *testing.T) {
 	assert.Equal(t, "analysis-1", answer.AnalysisID)
 	assert.Equal(t, "db saturation", answer.Answer)
 	assert.Equal(t, []string{"p95_latency"}, answer.Evidence)
+}
+
+func TestDecodeAnalysisPayloadDropsUnsupportedRootCauses(t *testing.T) {
+	t.Parallel()
+
+	result, err := decodeAnalysisPayload(`{
+		"summary":"latency increased",
+		"severity":"high",
+		"confidence":"medium",
+		"affectedServices":["checkout-service","invented-api"],
+		"detectedAnomalies":["p95 spike"],
+		"possibleRootCauses":[
+			{"cause":"invented queue issue","evidence":["invented_metric"],"confidence":"medium"},
+			{"cause":"db saturation","evidence":["p95_latency","invented_metric","p95_latency"],"confidence":"medium"}
+		],
+		"recommendedActions":[
+			{"action":"scale db","rationale":"reduce queue","priority":1,"evidenceIds":["ev-1","invented-id"]}
+		],
+		"codeLevelInsights":[],
+		"missingEvidence":[]
+	}`, domain.AnalysisRequest{AffectedServices: []string{"checkout-service"}}, []domain.Evidence{{ID: "ev-1", Name: "p95_latency"}})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"checkout-service"}, result.AffectedServices)
+	require.Len(t, result.PossibleRootCauses, 1)
+	assert.Equal(t, "db saturation", result.PossibleRootCauses[0].Cause)
+	assert.Equal(t, []string{"p95_latency"}, result.PossibleRootCauses[0].Evidence)
+	require.Len(t, result.RecommendedActions, 1)
+	assert.Equal(t, []string{"ev-1"}, result.RecommendedActions[0].EvidenceIDs)
 }
 
 func TestClientChatRetriesOn5xx(t *testing.T) {

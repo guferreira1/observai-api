@@ -429,7 +429,9 @@ paths:
         structure from free-form text.
 
         Instances that have no trace provider configured return `404` with
-        `code=not_found` so clients can disable the feature gracefully.
+        `code=provider_not_configured`. Analyses that completed without a
+        persisted trace reference return `404` with `code=trace_not_found`;
+        clients should explain that a new analysis with trace signals is needed.
       responses:
         "200":
           description: Structured trace insights for the analysis.
@@ -516,6 +518,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WrapperDtoResponde_ChatResponseDto"
+              examples:
+                out-of-scope:
+                  summary: Friendly refusal for a question unrelated to the analysis.
+                  value:
+                    data:
+                      analysisId: analysis-123
+                      answer: I can only answer questions about the active ObservAI analysis. Ask about the evidence, hypotheses, affected services or recommended investigation steps.
+                      evidence: []
+                    metadata:
+                      requestId: 0d4f9c43-1f8e-4f02-9b76-37c12f12d8b4
+                      processingTimeMs: 3
+                      provider: { mode: local }
             text/event-stream:
               schema:
                 type: string
@@ -524,22 +538,11 @@ paths:
                   the type (`token`, `evidence_cited`, `done`, `error`) and a
                   JSON-encoded `data:` line whose shape depends on the type.
         "400":
-          description: Invalid question or out-of-scope.
+          description: Invalid question payload.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/WrapperDtoResponde_ErrorResponse"
-              examples:
-                out-of-scope:
-                  summary: Question is unrelated to the analysis.
-                  value:
-                    data:
-                      code: question_out_of_scope
-                      message: I can only answer questions about the active ObservAI analysis. Ask about the evidence, hypotheses, affected services or recommended investigation steps.
-                    metadata:
-                      requestId: 0d4f9c43-1f8e-4f02-9b76-37c12f12d8b4
-                      processingTimeMs: 3
-                      provider: { mode: local }
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -1186,20 +1189,20 @@ components:
           description: |
             Machine-readable error code. Stable values:
             `invalid_analysis_request`, `invalid_analysis_filter`,
-            `invalid_chat_question`, `question_out_of_scope`, `invalid_json`,
+            `invalid_chat_question`, `invalid_json`,
             `invalid_request`, `analysis_not_found`,
-            `analysis_context_not_found`, `request_body_too_large`,
+            `analysis_context_not_found`, `trace_not_found`, `request_body_too_large`,
             `request_canceled`, `request_timeout`, `provider_auth_failed`,
             `feature_not_configured`, `internal_error`.
           enum:
             - invalid_analysis_request
             - invalid_analysis_filter
             - invalid_chat_question
-            - question_out_of_scope
             - invalid_json
             - invalid_request
             - analysis_not_found
             - analysis_context_not_found
+            - trace_not_found
             - analysis_job_not_found
             - chat_message_not_found
             - invalid_export_format

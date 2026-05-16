@@ -116,18 +116,18 @@ func (useCase *Chat) messageBelongsToAnalysis(ctx context.Context, analysisID st
 	return false
 }
 
-// Ask answers a question only when it is related to the active analysis.
+// Ask answers a question about the active analysis or returns a scoped refusal.
 //
 // Concurrent calls for the same analysis identifier are serialized through the
-// configured locker so chat exchanges remain in order and the LLM observes a
-// coherent conversation per analysis.
+// configured locker so chat exchanges remain in order.
 func (useCase *Chat) Ask(ctx context.Context, question domain.ChatQuestion) (domain.ChatAnswer, error) {
-	if strings.TrimSpace(question.AnalysisID) == "" {
+	question.AnalysisID = strings.TrimSpace(question.AnalysisID)
+	question.Question = strings.TrimSpace(question.Question)
+	if question.AnalysisID == "" {
 		return domain.ChatAnswer{}, fmt.Errorf("%w: analysis id is required", domain.ErrAnalysisNotFound)
 	}
-
-	if !useCase.scope.Allows(question.Question) {
-		return domain.ChatAnswer{}, domain.ErrQuestionOutOfScope
+	if question.Question == "" {
+		return domain.ChatAnswer{}, fmt.Errorf("%w: question is required", domain.ErrInvalidChatQuestion)
 	}
 
 	analysisContext, err := useCase.findAnalysisContext(ctx, question.AnalysisID)
@@ -141,12 +141,29 @@ func (useCase *Chat) Ask(ctx context.Context, question domain.ChatQuestion) (dom
 	}
 	defer release()
 
-	answer, err := useCase.responder.Answer(ctx, analysisContext, question)
-	if err != nil {
-		return domain.ChatAnswer{}, fmt.Errorf("answer analysis question: %w", err)
+	var answer domain.ChatAnswer
+	scopeDecision := useCase.scope.Evaluate(question.Question)
+	if scopeDecision.AllowsActiveAnalysis() {
+		answer, err = useCase.responder.Answer(ctx, analysisContext, question)
+		if err != nil {
+			return domain.ChatAnswer{}, fmt.Errorf("answer analysis question: %w", err)
+		}
+	} else {
+		answer = newOutOfScopeChatAnswer(analysisContext.AnalysisID, question.Question)
 	}
 
-	err = useCase.history.SaveExchange(ctx, domain.ChatMessage{
+	err = useCase.saveExchange(ctx, question, answer)
+	if err != nil {
+		return domain.ChatAnswer{}, err
+	}
+
+	_ = useCase.cache.Save(ctx, analysisContext, useCase.cacheTTL)
+
+	return answer, nil
+}
+
+func (useCase *Chat) saveExchange(ctx context.Context, question domain.ChatQuestion, answer domain.ChatAnswer) error {
+	err := useCase.history.SaveExchange(ctx, domain.ChatMessage{
 		AnalysisID: question.AnalysisID,
 		Role:       domain.ChatRoleUser,
 		Content:    question.Question,
@@ -160,12 +177,9 @@ func (useCase *Chat) Ask(ctx context.Context, question domain.ChatQuestion) (dom
 		CreatedAt:  useCase.now().UTC(),
 	})
 	if err != nil {
-		return domain.ChatAnswer{}, fmt.Errorf("save chat history: %w", err)
+		return fmt.Errorf("save chat history: %w", err)
 	}
-
-	_ = useCase.cache.Save(ctx, analysisContext, useCase.cacheTTL)
-
-	return answer, nil
+	return nil
 }
 
 // Regenerate re-asks the question carried by the supplied user message

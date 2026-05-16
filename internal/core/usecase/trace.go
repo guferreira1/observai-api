@@ -69,7 +69,7 @@ func (useCase *Trace) Get(ctx context.Context, analysisID string) (domain.TraceI
 		return domain.TraceInsights{}, errors.New("trace provider not configured")
 	}
 
-	traceReference := strings.TrimSpace(analysis.TraceID)
+	traceReference := selectAnalysisTraceID(analysis.TraceID, analysis.Evidence)
 	if traceReference == "" {
 		return domain.TraceInsights{}, fmt.Errorf("%w: analysis does not contain a trace id", domain.ErrTraceNotFound)
 	}

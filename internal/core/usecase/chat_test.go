@@ -44,17 +44,78 @@ func TestChatAskAnswersAnalysisRelatedQuestion(t *testing.T) {
 	assert.Equal(t, domain.ChatRoleAssistant, messages[1].Role)
 }
 
-func TestChatAskRejectsOutOfScopeQuestion(t *testing.T) {
+func TestChatAskAnswersContextualFollowUp(t *testing.T) {
 	t.Parallel()
 
+	ctx := context.Background()
 	repository := inmemory.NewAnalysisRepository()
+	err := repository.Save(ctx, domain.AnalysisResult{
+		ID:       "analysis-000001",
+		Summary:  "observai-api has error logs during self-test",
+		Evidence: []domain.Evidence{{ID: "ev_1", Name: "error_log_count"}},
+	})
+	require.NoError(t, err)
+
 	useCase := NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, testfakes.NewChatResponder())
 
-	_, err := useCase.Ask(context.Background(), domain.ChatQuestion{
+	answer, err := useCase.Ask(ctx, domain.ChatQuestion{
+		AnalysisID: "analysis-000001",
+		Question:   "E agora?",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "analysis-000001", answer.AnalysisID)
+	assert.Equal(t, []string{"ev_1"}, answer.Evidence)
+}
+
+func TestChatAskAnswersOutOfScopeQuestionWithoutCallingLLM(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := inmemory.NewAnalysisRepository()
+	err := repository.Save(ctx, domain.AnalysisResult{
+		ID:      "analysis-000001",
+		Summary: "checkout-service latency increased",
+	})
+	require.NoError(t, err)
+
+	useCase := NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, failingChatResponder{})
+
+	answer, err := useCase.Ask(ctx, domain.ChatQuestion{
 		AnalysisID: "analysis-000001",
 		Question:   "What is the capital of France?",
 	})
-	assert.True(t, errors.Is(err, domain.ErrQuestionOutOfScope))
+	require.NoError(t, err)
+	assert.Equal(t, "analysis-000001", answer.AnalysisID)
+	assert.Contains(t, answer.Answer, "I can only answer questions about the active ObservAI analysis")
+	assert.Empty(t, answer.Evidence)
+
+	messages, err := useCase.History(ctx, "analysis-000001", domain.ChatHistoryFilter{})
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "What is the capital of France?", messages[0].Content)
+	assert.Equal(t, answer.Answer, messages[1].Content)
+}
+
+func TestChatAskAnswersOutOfScopeQuestionInPortuguese(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	repository := inmemory.NewAnalysisRepository()
+	err := repository.Save(ctx, domain.AnalysisResult{
+		ID:      "analysis-000001",
+		Summary: "checkout-service latency increased",
+	})
+	require.NoError(t, err)
+
+	useCase := NewChat(repository, inmemory.NewAnalysisContextCache(), 6*time.Hour, repository, failingChatResponder{})
+
+	answer, err := useCase.Ask(ctx, domain.ChatQuestion{
+		AnalysisID: "analysis-000001",
+		Question:   "Qual é a capital da França?",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, answer.Answer, "Posso responder apenas sobre a análise ativa da ObservAI")
+	assert.Empty(t, answer.Evidence)
 }
 
 func TestChatAskReturnsNotFoundForMissingAnalysis(t *testing.T) {
@@ -166,8 +227,28 @@ func TestChatScopePolicy(t *testing.T) {
 			allowed:  true,
 		},
 		{
+			name:     "allows short portuguese follow up",
+			question: "E agora?",
+			allowed:  true,
+		},
+		{
+			name:     "allows short why follow up",
+			question: "Por quê?",
+			allowed:  true,
+		},
+		{
+			name:     "allows remediation follow up",
+			question: "Como resolver?",
+			allowed:  true,
+		},
+		{
 			name:     "rejects unrelated question",
 			question: "What is the capital of France?",
+			allowed:  false,
+		},
+		{
+			name:     "rejects unrelated why question",
+			question: "Why is the sky blue?",
 			allowed:  false,
 		},
 		{
@@ -196,7 +277,13 @@ func TestChatScopePolicy(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, test.allowed, policy.Allows(test.question))
+			assert.Equal(t, test.allowed, policy.Evaluate(test.question).AllowsActiveAnalysis())
 		})
 	}
+}
+
+type failingChatResponder struct{}
+
+func (responder failingChatResponder) Answer(context.Context, domain.AnalysisContext, domain.ChatQuestion) (domain.ChatAnswer, error) {
+	return domain.ChatAnswer{}, errors.New("chat responder should not be called")
 }
