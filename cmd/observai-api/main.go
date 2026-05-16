@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -30,22 +31,30 @@ import (
 var version = "dev"
 
 func main() {
+	if err := run(); err != nil {
+		_, writeErr := fmt.Fprintln(os.Stderr, err)
+		if writeErr != nil {
+			slog.Error("failed to print startup error", "error", writeErr)
+		}
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, timeLocation, err := loadRuntimeConfig()
 	if err != nil {
-		os.Stderr.WriteString(err.Error() + "\n")
-		os.Exit(1)
+		return err
 	}
 
 	log := logger.New(cfg.Env)
 
 	if err := runMigrationsOnStartup(cfg, log); err != nil {
-		os.Exit(1)
+		return err
 	}
 
 	metrics, providerMetrics, metricsHandler, tracer, err := bootstrapObservability(cfg, log)
 	if err != nil {
-		log.Error("tracer initialization failed", "error", err)
-		os.Exit(1)
+		return reportAndReturn(log, "tracer initialization failed", err)
 	}
 
 	store, cache, queue := bootstrapStorage(cfg, log, providerMetrics)
@@ -57,7 +66,7 @@ func main() {
 
 	providerConfigUseCase, llmConfigUseCase, err := buildProviderUseCases(cfg, log, store, ids)
 	if err != nil {
-		os.Exit(1)
+		return reportAndReturn(log, "provider configuration initialization failed", err)
 	}
 
 	credentialStore := credentials.NewDispatcher()
@@ -70,8 +79,7 @@ func main() {
 		llmConfigUseCase,
 	)
 	if err != nil {
-		log.Error("provider initialization failed", "error", err)
-		os.Exit(1)
+		return reportAndReturn(log, "provider initialization failed", err)
 	}
 
 	analysisUseCase := buildAnalysisUseCase(cfg, store, cache, ids, queue, registries)
@@ -81,8 +89,7 @@ func main() {
 
 	jwtSigner, authUseCase, userUseCase, err := buildAuthUseCases(cfg, log, store, ids)
 	if err != nil {
-		log.Error("user authentication initialization failed", "error", err)
-		os.Exit(1)
+		return reportAndReturn(log, "user authentication initialization failed", err)
 	}
 
 	webhookUseCase := buildWebhookUseCase(store, ids)
@@ -110,13 +117,11 @@ func main() {
 
 	scheduler, schedulerErr := newSchedulerIfEnabled(cfg, log, retentionUseCase, webhookUseCase)
 	if schedulerErr != nil {
-		log.Error("scheduler initialization failed", "error", schedulerErr)
-		os.Exit(1)
+		return reportAndReturn(log, "scheduler initialization failed", schedulerErr)
 	}
 	if scheduler != nil {
 		if err := scheduler.Start(); err != nil {
-			log.Error("scheduler start failed", "error", err)
-			os.Exit(1)
+			return reportAndReturn(log, "scheduler start failed", err)
 		}
 		defer scheduler.Stop()
 	}
@@ -148,9 +153,15 @@ func main() {
 	srv := server.New(cfg, handler)
 
 	if err := runHTTPServer(cfg, log, srv, analysisUseCase, queue, tracer); err != nil {
-		log.Error("server stopped with error", "error", err)
-		os.Exit(1)
+		return reportAndReturn(log, "server stopped with error", err)
 	}
+
+	return nil
+}
+
+func reportAndReturn(log *slog.Logger, msg string, err error) error {
+	log.Error(msg, "error", err)
+	return err
 }
 
 func loadRuntimeConfig() (config.Config, *time.Location, error) {
