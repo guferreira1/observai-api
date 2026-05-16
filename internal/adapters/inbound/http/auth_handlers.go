@@ -202,18 +202,7 @@ func (router *Router) handleLogin(writer stdhttp.ResponseWriter, request *stdhtt
 		Metadata:     map[string]string{"email": session.User.Email},
 	})
 
-	csrf, err := generateCSRFToken()
-	if err != nil {
-		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
-		return
-	}
-
-	router.setSessionCookies(writer, session, csrf)
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, SessionResponseDto{
-		User:      router.toUserResponseDto(session.User),
-		CSRFToken: csrf,
-		ExpiresAt: router.formatTime(session.Access.ExpiresAt),
-	})
+	router.writeSessionResponse(writer, requestID, startedAt, stdhttp.StatusOK, session)
 }
 
 func (router *Router) handleLogout(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -245,18 +234,7 @@ func (router *Router) handleRefresh(writer stdhttp.ResponseWriter, request *stdh
 		return
 	}
 
-	csrf, err := generateCSRFToken()
-	if err != nil {
-		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
-		return
-	}
-
-	router.setSessionCookies(writer, session, csrf)
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, SessionResponseDto{
-		User:      router.toUserResponseDto(session.User),
-		CSRFToken: csrf,
-		ExpiresAt: router.formatTime(session.Access.ExpiresAt),
-	})
+	router.writeSessionResponse(writer, requestID, startedAt, stdhttp.StatusOK, session)
 }
 
 func (router *Router) handleMe(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
@@ -618,6 +596,20 @@ func (router *Router) setSessionCookies(writer stdhttp.ResponseWriter, session u
 		HttpOnly: false,
 		Secure:   cookieConfig.Secure,
 		SameSite: cookieConfig.sameSite(),
+	})
+}
+
+func (router *Router) writeSessionResponse(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, status int, session usecase.AuthSession) {
+	csrf, err := generateCSRFToken()
+	if err != nil {
+		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
+		return
+	}
+	router.setSessionCookies(writer, session, csrf)
+	router.writeSuccess(writer, requestID, startedAt, status, SessionResponseDto{
+		User:      router.toUserResponseDto(session.User),
+		CSRFToken: csrf,
+		ExpiresAt: router.formatTime(session.Access.ExpiresAt),
 	})
 }
 

@@ -78,7 +78,10 @@ func (router *Router) handleBootstrapAdmin(writer stdhttp.ResponseWriter, reques
 	}()
 	if err != nil {
 		if errors.Is(err, usecase.ErrSetupAlreadyCompleted) {
-			router.writeError(writer, requestID, startedAt, stdhttp.StatusConflict, "setup_already_completed", "initial admin already provisioned")
+			if router.tryBootstrapAdminLogin(writer, request, requestID, startedAt, dto) {
+				return
+			}
+			router.writeError(writer, requestID, startedAt, stdhttp.StatusConflict, "setup_already_completed", "setup is already completed; sign in with an admin account to manage users")
 			return
 		}
 		if errors.Is(err, domain.ErrInvalidUser) {
@@ -86,6 +89,9 @@ func (router *Router) handleBootstrapAdmin(writer stdhttp.ResponseWriter, reques
 			return
 		}
 		if errors.Is(err, domain.ErrUserAlreadyExists) {
+			if router.tryBootstrapAdminLogin(writer, request, requestID, startedAt, dto) {
+				return
+			}
 			router.writeError(writer, requestID, startedAt, stdhttp.StatusConflict, "user_already_exists", "email is already registered")
 			return
 		}
@@ -101,15 +107,23 @@ func (router *Router) handleBootstrapAdmin(writer stdhttp.ResponseWriter, reques
 		router.writeDomainError(writer, requestID, startedAt, err)
 		return
 	}
-	csrf, err := generateCSRFToken()
-	if err != nil {
-		router.writeError(writer, requestID, startedAt, stdhttp.StatusInternalServerError, "internal_error", "could not generate csrf token")
-		return
+	router.writeSessionResponse(writer, requestID, startedAt, stdhttp.StatusCreated, session)
+}
+
+func (router *Router) tryBootstrapAdminLogin(writer stdhttp.ResponseWriter, request *stdhttp.Request, requestID string, startedAt time.Time, dto BootstrapAdminRequestDto) bool {
+	if router.sessions == nil {
+		return false
 	}
-	router.setSessionCookies(writer, session, csrf)
-	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusCreated, SessionResponseDto{
-		User:      router.toUserResponseDto(session.User),
-		CSRFToken: csrf,
-		ExpiresAt: router.formatTime(session.Access.ExpiresAt),
+	session, err := router.sessions.Login(request.Context(), dto.Email, dto.Password)
+	if err != nil || session.User.Role != domain.RoleAdmin {
+		return false
+	}
+	AnnotateAudit(request, AuditAnnotation{
+		Action:       "auth.login",
+		ResourceType: "user",
+		ResourceID:   session.User.ID,
+		Metadata:     map[string]string{"email": session.User.Email},
 	})
+	router.writeSessionResponse(writer, requestID, startedAt, stdhttp.StatusOK, session)
+	return true
 }

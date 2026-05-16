@@ -96,8 +96,22 @@ func TestSetupBootstrapAdminCreatesAdminUser(t *testing.T) {
 	}
 }
 
-func TestSetupBootstrapAdminRejectsSecondInvocation(t *testing.T) {
+func TestSetupBootstrapAdminAllowsAdditionalAdminWhileSetupIsOpen(t *testing.T) {
 	setup, _ := newSetupFixture(t, stubInventory{})
+	if _, err := setup.BootstrapAdmin(context.Background(), "admin@observai.io", "CorrectHorse42"); err != nil {
+		t.Fatalf("first bootstrap: %v", err)
+	}
+	user, err := setup.BootstrapAdmin(context.Background(), "another@observai.io", "AnotherP@ss1")
+	if err != nil {
+		t.Fatalf("second bootstrap: %v", err)
+	}
+	if user.Email != "another@observai.io" || user.Role != domain.RoleAdmin {
+		t.Fatalf("unexpected second admin: %+v", user)
+	}
+}
+
+func TestSetupBootstrapAdminRejectsWhenSetupCompleted(t *testing.T) {
+	setup, _ := newSetupFixture(t, stubInventory{observability: 1, llm: 1})
 	if _, err := setup.BootstrapAdmin(context.Background(), "admin@observai.io", "CorrectHorse42"); err != nil {
 		t.Fatalf("first bootstrap: %v", err)
 	}

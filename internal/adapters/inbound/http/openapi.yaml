@@ -579,7 +579,7 @@ paths:
   /v1/setup/admin:
     post:
       tags: [setup]
-      summary: Bootstrap the initial admin user. Rejected once any user exists.
+      summary: Create an admin while setup is open, or issue a session for an existing admin.
       operationId: bootstrapAdmin
       requestBody:
         required: true
@@ -588,8 +588,10 @@ paths:
             schema:
               $ref: "#/components/schemas/BootstrapAdminRequestDto"
       responses:
+        "200":
+          description: Existing admin credentials accepted and session issued.
         "201":
-          description: Initial admin created and session issued.
+          description: Admin created and session issued.
           content:
             application/json:
               schema:

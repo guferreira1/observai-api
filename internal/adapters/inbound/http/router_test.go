@@ -411,24 +411,7 @@ func TestRouterLogsSetupAdminUnknownField(t *testing.T) {
 func TestRouterBootstrapAdminAcceptsName(t *testing.T) {
 	t.Parallel()
 
-	userRepository := inmemory.NewUserRepository()
-	refreshRepository := inmemory.NewRefreshTokenRepository()
-	signer, err := crypto.NewJWTSigner(bytes.Repeat([]byte{0xab}, crypto.MinJWTSecretLength), "observai-api")
-	require.NoError(t, err)
-	setup := usecase.NewSetup(
-		userRepository,
-		usecase.NewUser(userRepository, refreshRepository, testfakes.NewIDGenerator("user")),
-		nil,
-	)
-	router := NewRouter(nil, nil, RouterOptions{
-		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		RequestTimeout: 5 * time.Second,
-		Setup:          setup,
-		Sessions: usecase.NewAuth(userRepository, refreshRepository, signer, testfakes.NewIDGenerator("session"), usecase.AuthOptions{
-			AccessTokenTTL:  15 * time.Minute,
-			RefreshTokenTTL: time.Hour,
-		}),
-	})
+	router := newSetupAuthTestRouter(t)
 	request := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
 		"name": "Gustavo Ferreira",
 		"email": "admin@observai.io",
@@ -446,6 +429,62 @@ func TestRouterBootstrapAdminAcceptsName(t *testing.T) {
 	assert.Equal(t, "admin@observai.io", payload.Data.User.Email)
 	assert.NotEmpty(t, payload.Data.CSRFToken)
 	assert.NotEmpty(t, payload.Data.ExpiresAt)
+}
+
+func TestRouterBootstrapAdminAllowsSecondAdminWhileSetupOpen(t *testing.T) {
+	t.Parallel()
+
+	router := newSetupAuthTestRouter(t)
+	firstRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	firstResponse := httptest.NewRecorder()
+	router.ServeHTTP(firstResponse, firstRequest)
+	require.Equal(t, stdhttp.StatusCreated, firstResponse.Code)
+
+	secondRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Second Admin",
+		"email": "second@observai.io",
+		"password": "AnotherP@ss1"
+	}`))
+	secondResponse := httptest.NewRecorder()
+	router.ServeHTTP(secondResponse, secondRequest)
+
+	require.Equal(t, stdhttp.StatusCreated, secondResponse.Code)
+	var payload WrapperDtoResponde[SessionResponseDto]
+	require.NoError(t, json.Unmarshal(secondResponse.Body.Bytes(), &payload))
+	assert.Equal(t, "Second Admin", payload.Data.User.Name)
+	assert.Equal(t, "second@observai.io", payload.Data.User.Email)
+}
+
+func TestRouterBootstrapAdminExistingAdminCredentialsIssueSession(t *testing.T) {
+	t.Parallel()
+
+	router := newSetupAuthTestRouter(t)
+	createRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	require.Equal(t, stdhttp.StatusCreated, createResponse.Code)
+
+	retryRequest := httptest.NewRequest(stdhttp.MethodPost, "/v1/setup/admin", bytes.NewBufferString(`{
+		"name": "Gustavo Ferreira",
+		"email": "admin@observai.io",
+		"password": "CorrectHorse42"
+	}`))
+	retryResponse := httptest.NewRecorder()
+	router.ServeHTTP(retryResponse, retryRequest)
+
+	require.Equal(t, stdhttp.StatusOK, retryResponse.Code)
+	var payload WrapperDtoResponde[SessionResponseDto]
+	require.NoError(t, json.Unmarshal(retryResponse.Body.Bytes(), &payload))
+	assert.Equal(t, "admin@observai.io", payload.Data.User.Email)
+	assert.NotEmpty(t, payload.Data.CSRFToken)
 }
 
 func TestRouterFormatsBootstrapAdminTimestampsInConfiguredTimezone(t *testing.T) {
@@ -956,6 +995,29 @@ func TestRateLimitMiddlewareUsesConfiguredProviderSummary(t *testing.T) {
 func newTestRouter() stdhttp.Handler {
 	router, _ := newTestRouterWithBackend()
 	return router
+}
+
+func newSetupAuthTestRouter(t *testing.T) stdhttp.Handler {
+	t.Helper()
+
+	userRepository := inmemory.NewUserRepository()
+	refreshRepository := inmemory.NewRefreshTokenRepository()
+	signer, err := crypto.NewJWTSigner(bytes.Repeat([]byte{0xab}, crypto.MinJWTSecretLength), "observai-api")
+	require.NoError(t, err)
+
+	userAdmin := usecase.NewUser(userRepository, refreshRepository, testfakes.NewIDGenerator("user"))
+	setup := usecase.NewSetup(userRepository, userAdmin, nil)
+	sessions := usecase.NewAuth(userRepository, refreshRepository, signer, testfakes.NewIDGenerator("session"), usecase.AuthOptions{
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: time.Hour,
+	})
+
+	return NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: 5 * time.Second,
+		Setup:          setup,
+		Sessions:       sessions,
+	})
 }
 
 func newTestRouterWithBackend() (stdhttp.Handler, *inmemory.AnalysisJobRepository) {
