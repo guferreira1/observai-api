@@ -173,16 +173,18 @@ Can you suggest code-level improvements?
 
 ObservAI API is AI-provider agnostic.
 
-Supported AI provider types:
+Supported AI provider types (shipped adapter):
 
 - OpenAI
 - Anthropic
-- Gemini
-- Azure OpenAI
-- OpenRouter
+- Azure OpenAI (via the `openai-compatible` alias)
+- OpenRouter (via the `openai-compatible` alias)
 - Ollama
-- LM Studio
-- Local/self-hosted LLMs
+- LM Studio and other local/self-hosted backends that speak the OpenAI API (via the `openai-compatible` alias)
+
+Roadmap (no adapter yet, contributions welcome):
+
+- Gemini
 
 The user owns the token, the provider and the data flow.
 
