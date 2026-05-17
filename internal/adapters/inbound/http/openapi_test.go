@@ -114,6 +114,8 @@ func TestOpenAPIDocumentCoversNewAdminAndAuthSurface(t *testing.T) {
 	} {
 		assert.Contains(t, spec, path, "OpenAPI spec must document %s", path)
 	}
+	assert.Contains(t, spec, "deleteAnalysis")
+	assert.Contains(t, spec, "/v1/analyses/{analysisID}/chat/{messageID}/regenerate")
 	assert.Contains(t, spec, "version: 1.0.0", "version must be bumped to 1.0.0")
 	assert.Contains(t, spec, "text/event-stream", "chat SSE must be documented")
 	assert.Contains(t, spec, "WrapperDtoResponde_ReadinessResponseDto")
@@ -121,4 +123,130 @@ func TestOpenAPIDocumentCoversNewAdminAndAuthSurface(t *testing.T) {
 	assert.Contains(t, spec, "mustChangePassword")
 	assert.Contains(t, spec, "evidenceIds")
 	assert.Contains(t, spec, "correlationId")
+}
+
+func TestOpenAPIDocumentMarksProtectedRoutes(t *testing.T) {
+	t.Parallel()
+
+	spec := string(OpenAPIDocument())
+	assert.Contains(t, spec, "\nsecurity:\n  - bearerAuth: []\n  - sessionCookie: []\n")
+	for _, scheme := range []string{"bearerAuth:", "sessionCookie:", "csrfToken:", "refreshCookie:"} {
+		assert.Contains(t, spec, scheme)
+	}
+
+	publicOperations := []openAPIOperation{
+		{path: "/health", method: "get"},
+		{path: "/healthz", method: "get"},
+		{path: "/readyz", method: "get"},
+		{path: "/metrics", method: "get"},
+		{path: "/v1/openapi.yaml", method: "get"},
+		{path: "/v1/setup/status", method: "get"},
+		{path: "/v1/setup/admin", method: "post"},
+		{path: "/v1/auth/login", method: "post"},
+	}
+	for _, operation := range publicOperations {
+		operationBlock := openAPIOperationBlock(t, spec, operation)
+		assert.Contains(t, operationBlock, "security: []", "%s %s must stay public", operation.method, operation.path)
+	}
+
+	protectedWriteOperations := []openAPIOperation{
+		{path: "/v1/telemetry", method: "post"},
+		{path: "/v1/analyses", method: "post"},
+		{path: "/v1/jobs/{jobID}", method: "delete"},
+		{path: "/v1/analyses/{analysisID}", method: "delete"},
+		{path: "/v1/analyses/{analysisID}/chat/{messageID}/feedback", method: "post"},
+		{path: "/v1/analyses/{analysisID}/chat/{messageID}/regenerate", method: "post"},
+		{path: "/v1/analyses/{analysisID}/chat", method: "post"},
+		{path: "/v1/auth/logout", method: "post"},
+		{path: "/v1/admin/users", method: "post"},
+		{path: "/v1/admin/users/{userID}", method: "patch"},
+		{path: "/v1/admin/users/{userID}", method: "delete"},
+		{path: "/v1/admin/keys", method: "post"},
+		{path: "/v1/admin/keys/{keyID}", method: "delete"},
+		{path: "/v1/admin/providers", method: "post"},
+		{path: "/v1/admin/providers/{providerID}", method: "patch"},
+		{path: "/v1/admin/providers/{providerID}", method: "delete"},
+		{path: "/v1/admin/providers/{providerID}/test", method: "post"},
+		{path: "/v1/admin/providers/{providerID}/activate", method: "post"},
+		{path: "/v1/admin/providers/{providerID}/deactivate", method: "post"},
+		{path: "/v1/admin/llm-providers", method: "post"},
+		{path: "/v1/admin/llm-providers/{llmID}", method: "patch"},
+		{path: "/v1/admin/llm-providers/{llmID}", method: "delete"},
+		{path: "/v1/admin/llm-providers/{llmID}/test", method: "post"},
+		{path: "/v1/admin/llm-providers/{llmID}/activate", method: "post"},
+		{path: "/v1/admin/webhooks", method: "post"},
+		{path: "/v1/admin/webhooks/{webhookID}", method: "patch"},
+		{path: "/v1/admin/webhooks/{webhookID}", method: "delete"},
+		{path: "/v1/admin/webhooks/{webhookID}/test", method: "post"},
+		{path: "/v1/admin/webhook-deliveries/{deliveryID}/retry", method: "post"},
+		{path: "/v1/admin/webhook-deliveries/{deliveryID}/replay", method: "post"},
+		{path: "/v1/admin/analyses", method: "delete"},
+	}
+	for _, operation := range protectedWriteOperations {
+		operationBlock := openAPIOperationBlock(t, spec, operation)
+		assert.Contains(t, operationBlock, "- bearerAuth: []", "%s %s must allow bearer auth", operation.method, operation.path)
+		assert.Contains(t, operationBlock, "- sessionCookie: []", "%s %s must allow session auth", operation.method, operation.path)
+		assert.Contains(t, operationBlock, "csrfToken: []", "%s %s must document CSRF for session auth", operation.method, operation.path)
+	}
+
+	sessionReadOperations := []openAPIOperation{
+		{path: "/v1/me", method: "get"},
+		{path: "/v1/me/preferences", method: "get"},
+		{path: "/v1/me/sessions", method: "get"},
+	}
+	for _, operation := range sessionReadOperations {
+		operationBlock := openAPIOperationBlock(t, spec, operation)
+		assert.Contains(t, operationBlock, "- sessionCookie: []", "%s %s must require user session auth", operation.method, operation.path)
+		assert.NotContains(t, operationBlock, "bearerAuth", "%s %s does not accept API-key bearer auth", operation.method, operation.path)
+	}
+
+	sessionWriteOperations := []openAPIOperation{
+		{path: "/v1/me", method: "patch"},
+		{path: "/v1/me/password", method: "post"},
+		{path: "/v1/me/preferences", method: "patch"},
+	}
+	for _, operation := range sessionWriteOperations {
+		operationBlock := openAPIOperationBlock(t, spec, operation)
+		assert.Contains(t, operationBlock, "- sessionCookie: []", "%s %s must require user session auth", operation.method, operation.path)
+		assert.Contains(t, operationBlock, "csrfToken: []", "%s %s must document CSRF for session auth", operation.method, operation.path)
+		assert.NotContains(t, operationBlock, "bearerAuth", "%s %s does not accept API-key bearer auth", operation.method, operation.path)
+	}
+
+	refreshBlock := openAPIOperationBlock(t, spec, openAPIOperation{path: "/v1/auth/refresh", method: "post"})
+	assert.Contains(t, refreshBlock, "- refreshCookie: []")
+	assert.NotContains(t, refreshBlock, "bearerAuth")
+
+	capabilitiesBlock := openAPIOperationBlock(t, spec, openAPIOperation{path: "/v1/capabilities", method: "get"})
+	assert.NotContains(t, capabilitiesBlock, "security: []", "capabilities inherits the authenticated default from the router")
+}
+
+type openAPIOperation struct {
+	path   string
+	method string
+}
+
+func openAPIOperationBlock(t *testing.T, spec string, operation openAPIOperation) string {
+	t.Helper()
+
+	pathMarker := "\n  " + operation.path + ":\n"
+	pathStart := strings.Index(spec, pathMarker)
+	require.NotEqual(t, -1, pathStart, "OpenAPI path %s must exist", operation.path)
+
+	pathBlock := spec[pathStart+len(pathMarker):]
+	if nextPathOffset := strings.Index(pathBlock, "\n  /"); nextPathOffset >= 0 {
+		pathBlock = pathBlock[:nextPathOffset]
+	}
+
+	methodMarker := "    " + operation.method + ":\n"
+	methodStart := strings.Index(pathBlock, methodMarker)
+	require.NotEqual(t, -1, methodStart, "OpenAPI operation %s %s must exist", operation.method, operation.path)
+
+	operationBlock := pathBlock[methodStart+len(methodMarker):]
+	operationEnd := len(operationBlock)
+	for _, nextMethod := range []string{"    get:\n", "    post:\n", "    patch:\n", "    delete:\n"} {
+		if nextMethodOffset := strings.Index(operationBlock, nextMethod); nextMethodOffset >= 0 && nextMethodOffset < operationEnd {
+			operationEnd = nextMethodOffset
+		}
+	}
+	return operationBlock[:operationEnd]
 }

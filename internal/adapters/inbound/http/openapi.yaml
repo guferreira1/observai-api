@@ -11,12 +11,21 @@ info:
     below.
 
     The interaction chat answers only questions related to an active analysis.
+
+    Protected operations accept either an `Authorization: Bearer <api-key>`
+    credential or the browser session cookie issued by the login/setup flows.
+    Unsafe methods authenticated with the session cookie also require
+    `X-CSRF-Token` matching the CSRF cookie. Endpoints tagged `admin` require
+    the admin role.
   license:
     name: MIT
     identifier: MIT
 servers:
   - url: http://localhost:8080
     description: Local development server
+security:
+  - bearerAuth: []
+  - sessionCookie: []
 tags:
   - name: analysis
     description: Create, list and retrieve analyses.
@@ -37,6 +46,7 @@ paths:
     get:
       tags: [operational]
       summary: Application health probe.
+      security: []
       responses:
         "200":
           description: Service is up.
@@ -48,6 +58,7 @@ paths:
     get:
       tags: [operational]
       summary: Kubernetes liveness probe.
+      security: []
       responses:
         "200":
           description: Process is alive.
@@ -59,6 +70,7 @@ paths:
     get:
       tags: [operational]
       summary: Kubernetes readiness probe.
+      security: []
       description: |
         Returns the aggregated probe result with one entry per critical
         dependency (database, queue, providers). The same payload is returned
@@ -81,6 +93,7 @@ paths:
     get:
       tags: [operational]
       summary: Prometheus scrape endpoint.
+      security: []
       responses:
         "200":
           description: Prometheus text exposition format.
@@ -92,6 +105,7 @@ paths:
     get:
       tags: [operational]
       summary: This OpenAPI specification.
+      security: []
       responses:
         "200":
           description: OpenAPI 3.1 document.
@@ -124,6 +138,10 @@ paths:
         The API stores no provider-specific response fields in the public
         contract and acknowledges the number of accepted events.
       operationId: acceptTelemetry
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       requestBody:
         required: true
         content:
@@ -147,6 +165,10 @@ paths:
         with `202 Accepted`. The client must poll `GET /v1/jobs/{jobID}` until
         the status becomes `completed` or `failed`. The same identifier is
         reused as the final analysis identifier once the worker finishes.
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       requestBody:
         required: true
         content:
@@ -286,6 +308,10 @@ paths:
         instance to abort cooperatively. Completed, failed and already-canceled
         jobs are returned unchanged so the call is idempotent. The response
         always contains the current job state.
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       responses:
         "202":
           description: Cancellation accepted; the response payload reflects the latest job state.
@@ -382,6 +408,22 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [analysis]
+      summary: Delete a stored analysis.
+      description: Removes the analysis through the configured retention use case. Operator or admin role required.
+      operationId: deleteAnalysis
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
+      responses:
+        "204":
+          description: Analysis deleted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/analyses/{analysisID}/export:
     parameters:
       - $ref: "#/components/parameters/AnalysisID"
@@ -459,6 +501,10 @@ paths:
         previously delivered assistant message. Repeated submissions overwrite
         the previous record so users can change their mind without producing
         duplicates.
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       requestBody:
         required: true
         content:
@@ -485,6 +531,33 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+  /v1/analyses/{analysisID}/chat/{messageID}/regenerate:
+    parameters:
+      - $ref: "#/components/parameters/AnalysisID"
+      - in: path
+        name: messageID
+        required: true
+        schema: { type: string }
+        description: Identifier of the assistant message to regenerate.
+    post:
+      tags: [chat]
+      summary: Regenerate an assistant answer for an existing chat message.
+      operationId: regenerateChatMessage
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
+      responses:
+        "200":
+          description: Regenerated scoped answer.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ChatResponseDto"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /v1/analyses/{analysisID}/chat:
     parameters:
       - $ref: "#/components/parameters/AnalysisID"
@@ -500,6 +573,10 @@ paths:
           carrying ordered `token`, `evidence_cited`, `done` and optional
           `error` events. Frontends should reconnect or fall back to the
           non-streaming response if the connection drops.
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       requestBody:
         required: true
         content:
@@ -576,6 +653,7 @@ paths:
       tags: [setup]
       summary: Report the installation status (admin presence, providers, LLM).
       operationId: getSetupStatus
+      security: []
       responses:
         "200": { description: Setup status snapshot. }
 
@@ -584,6 +662,7 @@ paths:
       tags: [setup]
       summary: Create an admin while setup is open, or issue a session for an existing admin.
       operationId: bootstrapAdmin
+      security: []
       requestBody:
         required: true
         content:
@@ -606,6 +685,7 @@ paths:
       tags: [auth]
       summary: Authenticate with email + password. Issues session/refresh/CSRF cookies.
       operationId: login
+      security: []
       responses:
         "200": { description: Session issued. }
         "401": { description: Invalid credentials. }
@@ -615,6 +695,10 @@ paths:
       tags: [auth]
       summary: Revoke the supplied refresh token and clear session cookies.
       operationId: logout
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       responses:
         "204": { description: Session cleared. }
 
@@ -623,6 +707,8 @@ paths:
       tags: [auth]
       summary: Rotate the refresh cookie and issue a fresh access token.
       operationId: refreshSession
+      security:
+        - refreshCookie: []
       responses:
         "200": { description: New session issued. }
         "401": { description: Refresh token invalid or expired. }
@@ -632,12 +718,17 @@ paths:
       tags: [profile]
       summary: Return the authenticated user profile.
       operationId: getMe
+      security:
+        - sessionCookie: []
       responses:
         "200": { description: User profile. }
     patch:
       tags: [profile]
       summary: Update the authenticated user's profile.
       operationId: updateMe
+      security:
+        - sessionCookie: []
+          csrfToken: []
       responses:
         "200": { description: Updated profile. }
 
@@ -646,6 +737,9 @@ paths:
       tags: [profile]
       summary: Change the authenticated user's password and revoke active sessions.
       operationId: changePassword
+      security:
+        - sessionCookie: []
+          csrfToken: []
       responses:
         "204": { description: Password updated; client must log in again. }
         "401": { description: Current password is incorrect. }
@@ -655,6 +749,8 @@ paths:
       tags: [profile]
       summary: Return the authenticated user's UI preferences.
       operationId: getMyPreferences
+      security:
+        - sessionCookie: []
       responses:
         "200":
           description: Current preferences.
@@ -666,6 +762,9 @@ paths:
       tags: [profile]
       summary: Partially update the authenticated user's UI preferences.
       operationId: updateMyPreferences
+      security:
+        - sessionCookie: []
+          csrfToken: []
       requestBody:
         required: true
         content:
@@ -685,6 +784,8 @@ paths:
       tags: [profile]
       summary: List browser sessions visible to the current user.
       operationId: listMySessions
+      security:
+        - sessionCookie: []
       responses:
         "200":
           description: Current sessions.
@@ -717,6 +818,10 @@ paths:
       tags: [admin]
       summary: Create a user (admin role required).
       operationId: createUser
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       responses:
         "201": { description: User created. }
   /v1/admin/users/{userID}:
@@ -736,6 +841,10 @@ paths:
       tags: [admin]
       summary: Update role / active flag (admin role required).
       operationId: updateUser
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters:
         - in: path
           name: userID
@@ -747,6 +856,10 @@ paths:
       tags: [admin]
       summary: Remove a user (admin role required).
       operationId: deleteUser
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters:
         - in: path
           name: userID
@@ -766,6 +879,10 @@ paths:
       tags: [admin]
       summary: Issue an API key. Plaintext returned once.
       operationId: issueAPIKey
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       responses:
         "201": { description: API key issued. }
   /v1/admin/keys/{keyID}:
@@ -773,6 +890,10 @@ paths:
       tags: [admin]
       summary: Revoke an API key.
       operationId: revokeAPIKey
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters:
         - in: path
           name: keyID
@@ -792,6 +913,10 @@ paths:
       tags: [admin]
       summary: Create a provider configuration. Credentials encrypted at rest.
       operationId: createProviderConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       responses:
         "201": { description: Provider created. }
   /v1/admin/providers/{providerID}:
@@ -803,11 +928,19 @@ paths:
     patch:
       tags: [admin]
       operationId: updateProviderConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
       responses: { "200": { description: Updated. } }
     delete:
       tags: [admin]
       operationId: deleteProviderConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
       responses: { "204": { description: Removed. } }
   /v1/admin/providers/{providerID}/test:
@@ -815,18 +948,30 @@ paths:
       tags: [admin]
       summary: Run a liveness probe against the provider.
       operationId: testProviderConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
       responses: { "200": { description: Probe outcome. } }
   /v1/admin/providers/{providerID}/activate:
     post:
       tags: [admin]
       operationId: activateProviderConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
       responses: { "200": { description: Activated. } }
   /v1/admin/providers/{providerID}/deactivate:
     post:
       tags: [admin]
       operationId: deactivateProviderConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: providerID, required: true, schema: { type: string } }]
       responses: { "200": { description: Deactivated. } }
 
@@ -838,6 +983,10 @@ paths:
     post:
       tags: [admin]
       operationId: createLLMConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       responses: { "201": { description: LLM config created. } }
   /v1/admin/llm-providers/{llmID}:
     get:
@@ -848,23 +997,39 @@ paths:
     patch:
       tags: [admin]
       operationId: updateLLMConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
       responses: { "200": { description: Updated. } }
     delete:
       tags: [admin]
       operationId: deleteLLMConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
       responses: { "204": { description: Removed. } }
   /v1/admin/llm-providers/{llmID}/test:
     post:
       tags: [admin]
       operationId: testLLMConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
       responses: { "200": { description: Probe outcome. } }
   /v1/admin/llm-providers/{llmID}/activate:
     post:
       tags: [admin]
       operationId: activateLLMConfig
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
       responses: { "200": { description: Activated. } }
 
@@ -896,11 +1061,19 @@ paths:
     post:
       tags: [admin]
       operationId: createWebhook
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       responses: { "201": { description: Webhook created. } }
   /v1/admin/webhooks/{webhookID}:
     patch:
       tags: [admin]
       operationId: updateWebhook
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: webhookID, required: true, schema: { type: string } }]
       requestBody:
         required: true
@@ -918,6 +1091,10 @@ paths:
     delete:
       tags: [admin]
       operationId: deleteWebhook
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: webhookID, required: true, schema: { type: string } }]
       responses: { "204": { description: Removed. } }
   /v1/admin/webhooks/{webhookID}/test:
@@ -925,6 +1102,10 @@ paths:
       tags: [admin]
       summary: Dispatch a synthetic webhook.test event to verify the receiver.
       operationId: testWebhook
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: webhookID, required: true, schema: { type: string } }]
       responses: { "202": { description: Test queued. } }
 
@@ -939,6 +1120,10 @@ paths:
       tags: [admin]
       summary: Re-dispatch a persisted delivery using the original payload.
       operationId: retryWebhookDelivery
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: deliveryID, required: true, schema: { type: string } }]
       responses: { "202": { description: Retry queued. } }
   /v1/admin/webhook-deliveries/{deliveryID}/replay:
@@ -946,6 +1131,10 @@ paths:
       tags: [admin]
       summary: Replay a persisted webhook delivery using the original payload.
       operationId: replayWebhookDelivery
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters: [{ in: path, name: deliveryID, required: true, schema: { type: string } }]
       responses:
         "202":
@@ -975,6 +1164,10 @@ paths:
       tags: [admin]
       summary: Purge analyses older than the supplied duration.
       operationId: purgeAnalyses
+      security:
+        - bearerAuth: []
+        - sessionCookie: []
+          csrfToken: []
       parameters:
         - { in: query, name: olderThan, required: true, schema: { type: string } }
       responses: { "200": { description: Purge outcome. } }
@@ -1006,6 +1199,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/WrapperDtoResponde_RetentionPreviewResponseDto"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key
+      description: "API key supplied as `Authorization: Bearer <token>`."
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: oai_session
+      description: Browser access-session cookie issued by login, refresh or first-run setup.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Required on unsafe methods when authenticating with the session cookie.
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: oai_refresh
+      description: Refresh-token cookie used only by `POST /v1/auth/refresh`.
   parameters:
     AnalysisID:
       in: path

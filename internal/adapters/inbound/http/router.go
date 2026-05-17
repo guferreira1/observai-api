@@ -29,6 +29,7 @@ type RouterOptions struct {
 	RateLimit          RateLimitConfig
 	Auth               AuthConfig
 	Cookies            CookieConfig
+	CORSAllowedOrigins []string
 	TimeLocation       *time.Location
 	Metrics            stdhttp.Handler
 	Liveness           stdhttp.Handler
@@ -126,6 +127,7 @@ func (router *Router) routes() {
 	router.mux.Use(middleware.RealIP)
 	router.mux.Use(loggerMiddleware(router.logger))
 	router.mux.Use(recoverMiddleware(router.logger, router.providerSummary))
+	router.mux.Use(corsMiddleware(router.options.CORSAllowedOrigins))
 	router.mux.Use(rateLimitMiddleware(newRateLimiter(router.options.RateLimit), router.providerSummary))
 	router.mux.Use(authMiddleware(router.options.Auth, router.providerSummary))
 	router.mux.Use(csrfMiddleware(router.providerSummary))

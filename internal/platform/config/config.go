@@ -158,6 +158,23 @@ type HTTPRateLimitConfig struct {
 // migrations reach the latest version. MigrationsDir is the filesystem path
 // passed to golang-migrate; the Docker image bundles /app/migrations.
 
+// CORSConfig controls cross-origin browser access to the HTTP API.
+//
+// Origins lists exact allowed origins (e.g. "https://app.example.com").
+// EnvOrigins accepts a comma-separated list from OBSERVAI_ALLOWED_ORIGINS and
+// is merged with the YAML list at load time. When the resulting list is empty
+// the CORS middleware behaves as a no-op, preserving the bundled same-origin
+// deployment where the browser talks to the Next.js proxy and never issues a
+// cross-origin request to the API.
+//
+// Wildcards are not supported: the middleware sends
+// Access-Control-Allow-Credentials so cookie-based auth works for split
+// deployments, and the CORS spec forbids credentials with "*".
+type CORSConfig struct {
+	Origins    []string `yaml:"origins"`
+	EnvOrigins string   `yaml:"-" env:"OBSERVAI_ALLOWED_ORIGINS"`
+}
+
 // HTTPAuthConfig configures bearer-token authentication for HTTP requests.
 //
 // Keys lists accepted API keys. The OBSERVAI_HTTP_AUTH_KEYS environment
@@ -243,6 +260,7 @@ type Config struct {
 	HTTPShutdownTimeout     time.Duration       `yaml:"http_shutdown_timeout" env:"OBSERVAI_HTTP_SHUTDOWN_TIMEOUT" env-default:"30s"`
 	HTTPRateLimit           HTTPRateLimitConfig `yaml:"http_rate_limit"`
 	HTTPAuth                HTTPAuthConfig      `yaml:"http_auth"`
+	CORS                    CORSConfig          `yaml:"cors"`
 	JWT                     JWTConfig           `yaml:"jwt"`
 	Cookies                 CookieConfig        `yaml:"cookies"`
 	Scheduler               SchedulerConfig     `yaml:"scheduler"`
@@ -280,6 +298,7 @@ func Load() (Config, error) {
 	cfg.Mode = normalizeMode(cfg.Mode)
 	migrateLegacyProviderConfig(&cfg)
 	mergeAuthKeysFromEnv(&cfg)
+	mergeCORSOriginsFromEnv(&cfg)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -340,6 +359,10 @@ func hasObservabilityProviderType(providers []ObservabilityProviderConfig, provi
 func mergeAuthKeysFromEnv(cfg *Config) {
 	cfg.HTTPAuth.Keys = appendCSV(cfg.HTTPAuth.Keys, cfg.HTTPAuth.EnvKeys)
 	cfg.HTTPAuth.AdminKeys = appendCSV(cfg.HTTPAuth.AdminKeys, cfg.HTTPAuth.EnvAdminKeys)
+}
+
+func mergeCORSOriginsFromEnv(cfg *Config) {
+	cfg.CORS.Origins = appendCSV(cfg.CORS.Origins, cfg.CORS.EnvOrigins)
 }
 
 func appendCSV(existing []string, csv string) []string {
