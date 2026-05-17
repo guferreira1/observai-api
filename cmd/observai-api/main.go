@@ -479,6 +479,7 @@ func buildHTTPRouter(
 			Domain: cfg.Cookies.Domain,
 			Secure: cfg.Cookies.Secure,
 		},
+		CORSAllowedOrigins:     cfg.CORS.Origins,
 		TimeLocation:           timeLocation,
 		Sessions:               authUseCase,
 		Users:                  userUseCase,

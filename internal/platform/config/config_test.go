@@ -331,6 +331,38 @@ observability:
 	assert.Equal(t, "http://new:9090", cfg.Observability.Providers[0].URL)
 }
 
+func TestLoadMergesCORSOriginsFromEnv(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	configPath := filepath.Join(t.TempDir(), "observai.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+cors:
+  origins:
+    - https://yaml.example.com
+`), 0o600))
+
+	t.Setenv("OBSERVAI_CONFIG_FILE", configPath)
+	t.Setenv("OBSERVAI_ALLOWED_ORIGINS", "https://env.example.com, https://other.example.com")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{
+		"https://yaml.example.com",
+		"https://env.example.com",
+		"https://other.example.com",
+	}, cfg.CORS.Origins)
+}
+
+func TestLoadLeavesCORSOriginsEmptyWhenUnset(t *testing.T) {
+	unsetEnv(t, allConfigEnvKeys()...)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Empty(t, cfg.CORS.Origins)
+}
+
 func TestNormalizeModeFallsBackToLocalForUnknownValues(t *testing.T) {
 	unsetEnv(t, allConfigEnvKeys()...)
 
@@ -366,6 +398,7 @@ func allConfigEnvKeys() []string {
 		"OBSERVAI_JWT_REFRESH_TTL",
 		"OBSERVAI_AUTH_COOKIE_DOMAIN",
 		"OBSERVAI_AUTH_COOKIE_SECURE",
+		"OBSERVAI_ALLOWED_ORIGINS",
 	}
 }
 
