@@ -1204,7 +1204,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: API key
-      description: API key supplied as `Authorization: Bearer <token>`.
+      description: "API key supplied as `Authorization: Bearer <token>`."
     sessionCookie:
       type: apiKey
       in: cookie
