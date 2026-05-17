@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/guferreira1/observai-api/internal/core/ports"
 )
 
 // ErrInvalidJWTSecret indicates the supplied HMAC secret is empty or too short.
@@ -21,19 +23,14 @@ const MinJWTSecretLength = 32
 
 // JWTClaims is the canonical claim set used by ObservAI access tokens.
 //
-// Subject carries the user identifier, Role carries the authorization
-// level, JTI uniquely identifies the token for audit and the standard
-// IssuedAt/ExpiresAt fields gate validity.
-type JWTClaims struct {
-	Subject   string
-	Role      string
-	JTI       string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
-	Issuer    string
-}
+// It is an alias of ports.AccessTokenClaims so the JWT signer implements
+// the AccessTokenSigner port without an additional conversion layer.
+type JWTClaims = ports.AccessTokenClaims
 
 // JWTSigner issues and validates HS256 access tokens.
+//
+// JWTSigner implements ports.AccessTokenSigner so use cases can depend on
+// the port instead of this concrete adapter.
 type JWTSigner struct {
 	secret []byte
 	issuer string

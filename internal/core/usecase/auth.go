@@ -13,7 +13,6 @@ import (
 
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/ports"
-	"github.com/guferreira1/observai-api/internal/platform/crypto"
 )
 
 const (
@@ -59,7 +58,8 @@ type UserProfileUpdateRequest struct {
 type Auth struct {
 	users   ports.UserRepository
 	refresh ports.RefreshTokenRepository
-	signer  *crypto.JWTSigner
+	signer  ports.AccessTokenSigner
+	hasher  ports.PasswordHasher
 	ids     ports.IDGenerator
 	opts    AuthOptions
 	now     func() time.Time
@@ -69,14 +69,14 @@ type Auth struct {
 //
 // Zero-valued TTLs fall back to safe defaults: 15 minutes for access tokens
 // and 7 days for refresh tokens.
-func NewAuth(users ports.UserRepository, refresh ports.RefreshTokenRepository, signer *crypto.JWTSigner, ids ports.IDGenerator, opts AuthOptions) *Auth {
+func NewAuth(users ports.UserRepository, refresh ports.RefreshTokenRepository, signer ports.AccessTokenSigner, hasher ports.PasswordHasher, ids ports.IDGenerator, opts AuthOptions) *Auth {
 	if opts.AccessTokenTTL <= 0 {
 		opts.AccessTokenTTL = 15 * time.Minute
 	}
 	if opts.RefreshTokenTTL <= 0 {
 		opts.RefreshTokenTTL = 7 * 24 * time.Hour
 	}
-	return &Auth{users: users, refresh: refresh, signer: signer, ids: ids, opts: opts, now: time.Now}
+	return &Auth{users: users, refresh: refresh, signer: signer, hasher: hasher, ids: ids, opts: opts, now: time.Now}
 }
 
 // Login validates the supplied credentials and issues a fresh session.
@@ -94,7 +94,7 @@ func (useCase *Auth) Login(ctx context.Context, email, password string) (AuthSes
 	if !user.IsActive {
 		return AuthSession{}, domain.ErrInvalidCredentials
 	}
-	if err := crypto.VerifyPassword(user.PasswordHash, password); err != nil {
+	if err := useCase.hasher.Verify(user.PasswordHash, password); err != nil {
 		return AuthSession{}, domain.ErrInvalidCredentials
 	}
 	now := useCase.now().UTC()
@@ -204,10 +204,10 @@ func (useCase *Auth) ChangePassword(ctx context.Context, userID, current, replac
 	if err != nil {
 		return err
 	}
-	if err := crypto.VerifyPassword(user.PasswordHash, current); err != nil {
+	if err := useCase.hasher.Verify(user.PasswordHash, current); err != nil {
 		return domain.ErrInvalidCredentials
 	}
-	hash, err := crypto.HashPassword(replacement, 0)
+	hash, err := useCase.hasher.Hash(replacement)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
@@ -230,7 +230,7 @@ func (useCase *Auth) issueSession(ctx context.Context, user domain.User, now tim
 	if err != nil {
 		return AuthSession{}, fmt.Errorf("generate access jti: %w", err)
 	}
-	accessClaims := crypto.JWTClaims{
+	accessClaims := ports.AccessTokenClaims{
 		Subject:   user.ID,
 		Role:      string(user.Role),
 		JTI:       accessJTI,

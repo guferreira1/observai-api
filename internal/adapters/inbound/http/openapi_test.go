@@ -102,6 +102,7 @@ func TestOpenAPIDocumentCoversNewAdminAndAuthSurface(t *testing.T) {
 		"/v1/admin/providers/{providerID}/test",
 		"/v1/admin/llm-providers",
 		"/v1/admin/llm-providers/{llmID}/activate",
+		"/v1/admin/provider-types",
 		"/v1/admin/webhooks/{webhookID}/test",
 		"/v1/admin/webhook-deliveries",
 		"/v1/admin/webhook-deliveries/{deliveryID}/retry",

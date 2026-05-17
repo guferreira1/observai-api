@@ -125,7 +125,7 @@ func toProviderConfigRequest(dto ProviderConfigRequestDto) usecase.ProviderConfi
 		timeout = 10 * time.Second
 	}
 	return usecase.ProviderConfigRequest{
-		Type:        domain.ObservabilityProviderType(strings.ToLower(strings.TrimSpace(dto.Type))),
+		Type:        strings.ToLower(strings.TrimSpace(dto.Type)),
 		Name:        dto.Name,
 		URL:         dto.URL,
 		Timeout:     timeout,
@@ -142,7 +142,7 @@ func toLLMConfigRequest(dto LLMConfigRequestDto) usecase.LLMConfigRequest {
 		timeout = 30 * time.Second
 	}
 	return usecase.LLMConfigRequest{
-		Type:     domain.LLMProviderType(strings.ToLower(strings.TrimSpace(dto.Type))),
+		Type:     strings.ToLower(strings.TrimSpace(dto.Type)),
 		Name:     dto.Name,
 		BaseURL:  dto.BaseURL,
 		Model:    dto.Model,
@@ -437,6 +437,28 @@ func formatBool(value bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// ProviderTypesResponseDto is the payload of GET /v1/admin/provider-types.
+//
+// Observability lists the observability provider identifiers this build
+// accepts when configuring a provider; LLM does the same for LLM
+// providers. The frontend consumes the lists to populate type pickers
+// without hardcoding adapter names.
+type ProviderTypesResponseDto struct {
+	Observability []string `json:"observability"`
+	LLM           []string `json:"llm"`
+}
+
+func (router *Router) handleListProviderTypes(writer stdhttp.ResponseWriter, request *stdhttp.Request) {
+	startedAt := time.Now()
+	requestID := router.requestID(request)
+
+	payload := ProviderTypesResponseDto{
+		Observability: router.observabilityProviders.SupportedTypes(),
+		LLM:           router.llmProviders.SupportedTypes(),
+	}
+	router.writeSuccess(writer, requestID, startedAt, stdhttp.StatusOK, payload)
 }
 
 func (router *Router) writeProviderConfigError(writer stdhttp.ResponseWriter, requestID string, startedAt time.Time, err error) {

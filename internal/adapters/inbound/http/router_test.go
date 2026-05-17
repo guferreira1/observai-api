@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/factory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/testfakes"
 	"github.com/guferreira1/observai-api/internal/core/domain"
@@ -382,7 +383,7 @@ func TestRouterLogsSetupAdminUnknownField(t *testing.T) {
 	userRepository := inmemory.NewUserRepository()
 	setup := usecase.NewSetup(
 		userRepository,
-		usecase.NewUser(userRepository, nil, testfakes.NewIDGenerator("user")),
+		usecase.NewUser(userRepository, nil, crypto.NewBcryptPasswordHasher(4), testfakes.NewIDGenerator("user")),
 		nil,
 	)
 	router := NewRouter(nil, nil, RouterOptions{
@@ -494,7 +495,7 @@ func TestRouterFormatsBootstrapAdminTimestampsInConfiguredTimezone(t *testing.T)
 	userRepository := inmemory.NewUserRepository()
 	setup := usecase.NewSetup(
 		userRepository,
-		usecase.NewUser(userRepository, nil, testfakes.NewIDGenerator("user")),
+		usecase.NewUser(userRepository, nil, crypto.NewBcryptPasswordHasher(4), testfakes.NewIDGenerator("user")),
 		nil,
 	)
 	router := NewRouter(nil, nil, RouterOptions{
@@ -993,6 +994,7 @@ func TestRouterReportsDisabledOptionalRoutes(t *testing.T) {
 		{stdhttp.MethodGet, "/v1/admin/users"},
 		{stdhttp.MethodGet, "/v1/admin/providers"},
 		{stdhttp.MethodGet, "/v1/admin/llm-providers"},
+		{stdhttp.MethodGet, "/v1/admin/provider-types"},
 	}
 
 	for _, testCase := range cases {
@@ -1010,6 +1012,37 @@ func TestRouterReportsDisabledOptionalRoutes(t *testing.T) {
 			assert.NotEmpty(t, payload.Metadata.RequestID)
 		})
 	}
+}
+
+func TestRouterListsProviderTypesFromRegistry(t *testing.T) {
+	t.Parallel()
+
+	signer, users, user := newJWTFixture(t)
+	router := NewRouter(nil, nil, RouterOptions{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RequestTimeout: 5 * time.Second,
+		Auth: AuthConfig{
+			Signer: signer,
+			Users:  users,
+		},
+		ObservabilityProviders: factory.NewObservabilityRegistry(),
+		LLMProviders:           factory.NewLLMRegistry(),
+	})
+	request := httptest.NewRequest(stdhttp.MethodGet, "/v1/admin/provider-types", nil)
+	request.AddCookie(&stdhttp.Cookie{Name: SessionCookieName, Value: issueAccessToken(t, signer, user)})
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, stdhttp.StatusOK, response.Code)
+	var payload WrapperDtoResponde[ProviderTypesResponseDto]
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Contains(t, payload.Data.Observability, factory.ProviderTypePrometheus)
+	assert.Contains(t, payload.Data.Observability, factory.ProviderTypeJaeger)
+	assert.Contains(t, payload.Data.Observability, factory.ProviderTypeOTEL)
+	assert.Contains(t, payload.Data.LLM, factory.LLMProviderTypeOpenAI)
+	assert.Contains(t, payload.Data.LLM, factory.LLMProviderTypeAnthropic)
+	assert.NotContains(t, payload.Data.LLM, "openai-compatible", "aliases should not appear in the canonical catalogue")
 }
 
 func TestRouterAcceptsTelemetry(t *testing.T) {
@@ -1107,9 +1140,10 @@ func newSetupAuthTestRouter(t *testing.T) stdhttp.Handler {
 	signer, err := crypto.NewJWTSigner(bytes.Repeat([]byte{0xab}, crypto.MinJWTSecretLength), "observai-api")
 	require.NoError(t, err)
 
-	userAdmin := usecase.NewUser(userRepository, refreshRepository, testfakes.NewIDGenerator("user"))
+	hasher := crypto.NewBcryptPasswordHasher(4)
+	userAdmin := usecase.NewUser(userRepository, refreshRepository, hasher, testfakes.NewIDGenerator("user"))
 	setup := usecase.NewSetup(userRepository, userAdmin, nil)
-	sessions := usecase.NewAuth(userRepository, refreshRepository, signer, testfakes.NewIDGenerator("session"), usecase.AuthOptions{
+	sessions := usecase.NewAuth(userRepository, refreshRepository, signer, hasher, testfakes.NewIDGenerator("session"), usecase.AuthOptions{
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: time.Hour,
 	})

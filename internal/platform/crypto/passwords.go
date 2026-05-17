@@ -44,3 +44,28 @@ func VerifyPassword(hash string, password string) error {
 	}
 	return nil
 }
+
+// BcryptPasswordHasher is the bcrypt-backed adapter that satisfies
+// ports.PasswordHasher.
+//
+// Cost overrides the bcrypt cost; values <= 0 fall back to
+// DefaultPasswordCost. Tests can use a low cost to keep runs fast.
+type BcryptPasswordHasher struct {
+	cost int
+}
+
+// NewBcryptPasswordHasher returns a hasher that applies the supplied
+// bcrypt cost. A cost <= 0 falls back to DefaultPasswordCost.
+func NewBcryptPasswordHasher(cost int) *BcryptPasswordHasher {
+	return &BcryptPasswordHasher{cost: cost}
+}
+
+// Hash implements ports.PasswordHasher.
+func (hasher *BcryptPasswordHasher) Hash(password string) (string, error) {
+	return HashPassword(password, hasher.cost)
+}
+
+// Verify implements ports.PasswordHasher.
+func (hasher *BcryptPasswordHasher) Verify(hash string, password string) error {
+	return VerifyPassword(hash, password)
+}

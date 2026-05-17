@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-playground/validator/v10"
 	"github.com/guferreira1/observai-api/internal/core/domain"
+	"github.com/guferreira1/observai-api/internal/core/ports"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
 	"github.com/guferreira1/observai-api/internal/platform/health"
 	"github.com/guferreira1/observai-api/internal/platform/logger"
@@ -48,26 +49,35 @@ type RouterOptions struct {
 	Setup              *usecase.Setup
 	ProviderConfigs    *usecase.ProviderConfig
 	LLMConfigs         *usecase.LLMConfig
+	// ObservabilityProviders is consulted by GET /v1/admin/provider-types
+	// to advertise the observability provider identifiers this build
+	// accepts. The router treats the field as optional; the endpoint is
+	// disabled when nil.
+	ObservabilityProviders ports.ObservabilityProviderRegistry
+	// LLMProviders is the LLM counterpart of ObservabilityProviders.
+	LLMProviders ports.LLMProviderRegistry
 }
 
 // Router handles HTTP requests for ObservAI API.
 type Router struct {
-	mux             chi.Router
-	analysis        *usecase.Analysis
-	chat            *usecase.Chat
-	traces          *usecase.Trace
-	apiKeys         *usecase.APIKey
-	webhooks        *usecase.WebhookSubscriptions
-	auditLog        *usecase.AuditLog
-	retention       *usecase.AnalysisRetention
-	sessions        *usecase.Auth
-	users           *usecase.User
-	setup           *usecase.Setup
-	providerConfigs *usecase.ProviderConfig
-	llmConfigs      *usecase.LLMConfig
-	validate        *validator.Validate
-	logger          *slog.Logger
-	options         RouterOptions
+	mux                    chi.Router
+	analysis               *usecase.Analysis
+	chat                   *usecase.Chat
+	traces                 *usecase.Trace
+	apiKeys                *usecase.APIKey
+	webhooks               *usecase.WebhookSubscriptions
+	auditLog               *usecase.AuditLog
+	retention              *usecase.AnalysisRetention
+	sessions               *usecase.Auth
+	users                  *usecase.User
+	setup                  *usecase.Setup
+	providerConfigs        *usecase.ProviderConfig
+	llmConfigs             *usecase.LLMConfig
+	observabilityProviders ports.ObservabilityProviderRegistry
+	llmProviders           ports.LLMProviderRegistry
+	validate               *validator.Validate
+	logger                 *slog.Logger
+	options                RouterOptions
 }
 
 // NewRouter creates the ObservAI HTTP router.
@@ -81,22 +91,24 @@ func NewRouter(analysis *usecase.Analysis, chat *usecase.Chat, opts RouterOption
 	}
 
 	router := &Router{
-		mux:             chi.NewRouter(),
-		analysis:        analysis,
-		chat:            chat,
-		traces:          opts.Trace,
-		apiKeys:         opts.APIKeys,
-		webhooks:        opts.Webhooks,
-		auditLog:        opts.AuditLog,
-		retention:       opts.Retention,
-		sessions:        opts.Sessions,
-		users:           opts.Users,
-		setup:           opts.Setup,
-		providerConfigs: opts.ProviderConfigs,
-		llmConfigs:      opts.LLMConfigs,
-		validate:        newRequestValidator(),
-		logger:          opts.Logger,
-		options:         opts,
+		mux:                    chi.NewRouter(),
+		analysis:               analysis,
+		chat:                   chat,
+		traces:                 opts.Trace,
+		apiKeys:                opts.APIKeys,
+		webhooks:               opts.Webhooks,
+		auditLog:               opts.AuditLog,
+		retention:              opts.Retention,
+		sessions:               opts.Sessions,
+		users:                  opts.Users,
+		setup:                  opts.Setup,
+		providerConfigs:        opts.ProviderConfigs,
+		llmConfigs:             opts.LLMConfigs,
+		observabilityProviders: opts.ObservabilityProviders,
+		llmProviders:           opts.LLMProviders,
+		validate:               newRequestValidator(),
+		logger:                 opts.Logger,
+		options:                opts,
 	}
 
 	router.routes()
@@ -208,6 +220,7 @@ func (router *Router) routes() {
 	router.mux.Method(stdhttp.MethodDelete, "/v1/admin/llm-providers/{llmID}", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleDeleteLLMConfig)))
 	router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers/{llmID}/test", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleTestLLMConfig)))
 	router.mux.Method(stdhttp.MethodPost, "/v1/admin/llm-providers/{llmID}/activate", router.requireConfigured("llm configuration", router.llmConfigs != nil, admin(router.handleActivateLLMConfig)))
+	router.mux.Method(stdhttp.MethodGet, "/v1/admin/provider-types", router.requireConfigured("provider type catalogue", router.observabilityProviders != nil && router.llmProviders != nil, admin(router.handleListProviderTypes)))
 
 	if router.options.Metrics != nil {
 		router.mux.Handle("/metrics", router.options.Metrics)

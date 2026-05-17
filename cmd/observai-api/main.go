@@ -14,6 +14,7 @@ import (
 
 	inboundhttp "github.com/guferreira1/observai-api/internal/adapters/inbound/http"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/credentials"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/factory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/providertest"
 	uuidadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/uuid"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
@@ -238,8 +239,8 @@ func buildProviderUseCases(cfg config.Config, log *slog.Logger, store analysisSt
 		}
 
 		tester := providertest.New()
-		providerConfigUseCase = usecase.NewProviderConfig(store.providerConfigs, cipher, tester, ids)
-		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, ids)
+		providerConfigUseCase = usecase.NewProviderConfig(store.providerConfigs, cipher, tester, factory.NewObservabilityRegistry(), ids)
+		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, factory.NewLLMRegistry(), ids)
 	}
 
 	return providerConfigUseCase, llmConfigUseCase, nil
@@ -336,11 +337,12 @@ func buildAuthUseCases(
 			return nil, nil, nil, err
 		}
 		jwtSigner = signer
-		authUseCase = usecase.NewAuth(store.users, store.refreshTokens, jwtSigner, ids, usecase.AuthOptions{
+		hasher := crypto.NewBcryptPasswordHasher(0)
+		authUseCase = usecase.NewAuth(store.users, store.refreshTokens, jwtSigner, hasher, ids, usecase.AuthOptions{
 			AccessTokenTTL:  cfg.JWT.AccessTokenTTL,
 			RefreshTokenTTL: cfg.JWT.RefreshTokenTTL,
 		})
-		userUseCase = usecase.NewUser(store.users, store.refreshTokens, ids)
+		userUseCase = usecase.NewUser(store.users, store.refreshTokens, hasher, ids)
 		return jwtSigner, authUseCase, userUseCase, nil
 	}
 
@@ -477,16 +479,18 @@ func buildHTTPRouter(
 			Domain: cfg.Cookies.Domain,
 			Secure: cfg.Cookies.Secure,
 		},
-		TimeLocation:     timeLocation,
-		Sessions:         authUseCase,
-		Users:            userUseCase,
-		Setup:            setupUseCase,
-		ProviderConfigs:  providerConfigUseCase,
-		LLMConfigs:       llmConfigUseCase,
-		Metrics:          metricsHandler,
-		ReadinessChecker: checker,
-		Capabilities:     capabilities.Get(),
-		CapabilitiesFunc: capabilities.Get,
+		TimeLocation:           timeLocation,
+		Sessions:               authUseCase,
+		Users:                  userUseCase,
+		Setup:                  setupUseCase,
+		ProviderConfigs:        providerConfigUseCase,
+		LLMConfigs:             llmConfigUseCase,
+		ObservabilityProviders: factory.NewObservabilityRegistry(),
+		LLMProviders:           factory.NewLLMRegistry(),
+		Metrics:                metricsHandler,
+		ReadinessChecker:       checker,
+		Capabilities:           capabilities.Get(),
+		CapabilitiesFunc:       capabilities.Get,
 		RetentionPolicy: inboundhttp.RetentionPolicyOptions{
 			Days:     cfg.Scheduler.RetentionDays,
 			Quantity: cfg.Scheduler.RetentionQuantity,
