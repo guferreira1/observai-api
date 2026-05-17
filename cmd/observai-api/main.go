@@ -336,11 +336,12 @@ func buildAuthUseCases(
 			return nil, nil, nil, err
 		}
 		jwtSigner = signer
-		authUseCase = usecase.NewAuth(store.users, store.refreshTokens, jwtSigner, ids, usecase.AuthOptions{
+		hasher := crypto.NewBcryptPasswordHasher(0)
+		authUseCase = usecase.NewAuth(store.users, store.refreshTokens, jwtSigner, hasher, ids, usecase.AuthOptions{
 			AccessTokenTTL:  cfg.JWT.AccessTokenTTL,
 			RefreshTokenTTL: cfg.JWT.RefreshTokenTTL,
 		})
-		userUseCase = usecase.NewUser(store.users, store.refreshTokens, ids)
+		userUseCase = usecase.NewUser(store.users, store.refreshTokens, hasher, ids)
 		return jwtSigner, authUseCase, userUseCase, nil
 	}
 

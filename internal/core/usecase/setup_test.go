@@ -8,6 +8,7 @@ import (
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/inmemory"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/ports"
+	"github.com/guferreira1/observai-api/internal/platform/crypto"
 )
 
 type stubInventory struct {
@@ -27,7 +28,7 @@ func newSetupFixture(t *testing.T, inventory ports.ProviderInventory) (*Setup, *
 	users := inmemory.NewUserRepository()
 	refresh := inmemory.NewRefreshTokenRepository()
 	ids := &sequentialIDs{}
-	userAdmin := NewUser(users, refresh, ids)
+	userAdmin := NewUser(users, refresh, crypto.NewBcryptPasswordHasher(4), ids)
 	return NewSetup(users, userAdmin, inventory), users
 }
 

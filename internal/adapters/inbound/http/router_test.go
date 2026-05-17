@@ -382,7 +382,7 @@ func TestRouterLogsSetupAdminUnknownField(t *testing.T) {
 	userRepository := inmemory.NewUserRepository()
 	setup := usecase.NewSetup(
 		userRepository,
-		usecase.NewUser(userRepository, nil, testfakes.NewIDGenerator("user")),
+		usecase.NewUser(userRepository, nil, crypto.NewBcryptPasswordHasher(4), testfakes.NewIDGenerator("user")),
 		nil,
 	)
 	router := NewRouter(nil, nil, RouterOptions{
@@ -494,7 +494,7 @@ func TestRouterFormatsBootstrapAdminTimestampsInConfiguredTimezone(t *testing.T)
 	userRepository := inmemory.NewUserRepository()
 	setup := usecase.NewSetup(
 		userRepository,
-		usecase.NewUser(userRepository, nil, testfakes.NewIDGenerator("user")),
+		usecase.NewUser(userRepository, nil, crypto.NewBcryptPasswordHasher(4), testfakes.NewIDGenerator("user")),
 		nil,
 	)
 	router := NewRouter(nil, nil, RouterOptions{
@@ -1107,9 +1107,10 @@ func newSetupAuthTestRouter(t *testing.T) stdhttp.Handler {
 	signer, err := crypto.NewJWTSigner(bytes.Repeat([]byte{0xab}, crypto.MinJWTSecretLength), "observai-api")
 	require.NoError(t, err)
 
-	userAdmin := usecase.NewUser(userRepository, refreshRepository, testfakes.NewIDGenerator("user"))
+	hasher := crypto.NewBcryptPasswordHasher(4)
+	userAdmin := usecase.NewUser(userRepository, refreshRepository, hasher, testfakes.NewIDGenerator("user"))
 	setup := usecase.NewSetup(userRepository, userAdmin, nil)
-	sessions := usecase.NewAuth(userRepository, refreshRepository, signer, testfakes.NewIDGenerator("session"), usecase.AuthOptions{
+	sessions := usecase.NewAuth(userRepository, refreshRepository, signer, hasher, testfakes.NewIDGenerator("session"), usecase.AuthOptions{
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: time.Hour,
 	})

@@ -8,13 +8,13 @@ import (
 
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/ports"
-	"github.com/guferreira1/observai-api/internal/platform/crypto"
 )
 
 // User is the admin-facing use case for managing application users.
 type User struct {
 	repository ports.UserRepository
 	refresh    ports.RefreshTokenRepository
+	hasher     ports.PasswordHasher
 	ids        ports.IDGenerator
 	now        func() time.Time
 }
@@ -23,8 +23,8 @@ type User struct {
 //
 // When refresh is non-nil, deactivating or deleting a user also revokes
 // every outstanding refresh token belonging to them.
-func NewUser(repository ports.UserRepository, refresh ports.RefreshTokenRepository, ids ports.IDGenerator) *User {
-	return &User{repository: repository, refresh: refresh, ids: ids, now: time.Now}
+func NewUser(repository ports.UserRepository, refresh ports.RefreshTokenRepository, hasher ports.PasswordHasher, ids ports.IDGenerator) *User {
+	return &User{repository: repository, refresh: refresh, hasher: hasher, ids: ids, now: time.Now}
 }
 
 // Create provisions a new user with the supplied role.
@@ -65,7 +65,7 @@ func (useCase *User) CreateWithOptions(ctx context.Context, request UserCreateRe
 	if err != nil {
 		return domain.User{}, fmt.Errorf("generate user id: %w", err)
 	}
-	hash, err := crypto.HashPassword(request.Password, 0)
+	hash, err := useCase.hasher.Hash(request.Password)
 	if err != nil {
 		return domain.User{}, fmt.Errorf("hash password: %w", err)
 	}

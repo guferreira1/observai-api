@@ -52,8 +52,9 @@ func newAuthFixture(t *testing.T) (*Auth, *inmemory.UserRepository, *inmemory.Re
 	if err != nil {
 		t.Fatalf("new signer: %v", err)
 	}
+	hasher := crypto.NewBcryptPasswordHasher(4)
 	ids := &sequentialIDs{}
-	auth := NewAuth(users, refresh, signer, ids, AuthOptions{AccessTokenTTL: 5 * time.Minute, RefreshTokenTTL: time.Hour})
+	auth := NewAuth(users, refresh, signer, hasher, ids, AuthOptions{AccessTokenTTL: 5 * time.Minute, RefreshTokenTTL: time.Hour})
 	return auth, users, refresh, signer, ids
 }
 
