@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/factory"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/ports"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
@@ -18,7 +19,7 @@ func TestInitialRuntimeProviderConfigLoadsActiveDatabaseProviders(t *testing.T) 
 		active: []domain.ProviderConfig{
 			{
 				ID:       "prometheus",
-				Type:     domain.ProviderTypePrometheus,
+				Type:     factory.ProviderTypePrometheus,
 				Name:     "Prometheus",
 				URL:      "http://prometheus:9090",
 				Signals:  []string{"metrics"},
@@ -26,24 +27,24 @@ func TestInitialRuntimeProviderConfigLoadsActiveDatabaseProviders(t *testing.T) 
 			},
 			{
 				ID:       "jaeger",
-				Type:     domain.ProviderTypeJaeger,
+				Type:     factory.ProviderTypeJaeger,
 				Name:     "Jaeger",
 				URL:      "http://jaeger:16686",
 				Signals:  []string{"traces"},
 				IsActive: true,
 			},
 		},
-	}, nil, nil, nil)
+	}, nil, nil, factory.NewObservabilityRegistry(), nil)
 	llmUseCase := usecase.NewLLMConfig(&stubLLMConfigRepository{
 		active: &domain.LLMConfig{
 			ID:       "openai",
-			Type:     domain.LLMProviderTypeOpenAI,
+			Type:     factory.LLMProviderTypeOpenAI,
 			Name:     "ChatGPT",
 			BaseURL:  "https://api.openai.com/v1",
 			Model:    "gpt-4o-mini",
 			IsActive: true,
 		},
-	}, nil, nil, nil)
+	}, nil, nil, factory.NewLLMRegistry(), nil)
 
 	runtimeConfig, loaded := initialRuntimeProviderConfig(context.Background(), config.Config{}, discardLogger(), providerUseCase, llmUseCase)
 
@@ -56,7 +57,7 @@ func TestInitialRuntimeProviderConfigLoadsActiveDatabaseProviders(t *testing.T) 
 	if runtimeConfig.Observability.Providers[0].Name != "Prometheus" {
 		t.Fatalf("expected first provider to be Prometheus, got %q", runtimeConfig.Observability.Providers[0].Name)
 	}
-	if runtimeConfig.Observability.Providers[1].Type != string(domain.ProviderTypeJaeger) {
+	if runtimeConfig.Observability.Providers[1].Type != factory.ProviderTypeJaeger {
 		t.Fatalf("expected second provider to be jaeger, got %q", runtimeConfig.Observability.Providers[1].Type)
 	}
 	if providerCount := len(runtimeConfig.LLM.Providers); providerCount != 1 {
@@ -82,8 +83,8 @@ func TestInitialRuntimeProviderConfigKeepsBootstrapConfigWithoutActiveDatabasePr
 			},
 		},
 	}
-	providerUseCase := usecase.NewProviderConfig(&stubProviderConfigRepository{}, nil, nil, nil)
-	llmUseCase := usecase.NewLLMConfig(&stubLLMConfigRepository{}, nil, nil, nil)
+	providerUseCase := usecase.NewProviderConfig(&stubProviderConfigRepository{}, nil, nil, factory.NewObservabilityRegistry(), nil)
+	llmUseCase := usecase.NewLLMConfig(&stubLLMConfigRepository{}, nil, nil, factory.NewLLMRegistry(), nil)
 
 	runtimeConfig, loaded := initialRuntimeProviderConfig(context.Background(), bootstrapConfig, discardLogger(), providerUseCase, llmUseCase)
 

@@ -49,7 +49,7 @@ func (repository *ProviderConfigRepository) Create(ctx context.Context, config d
 	}
 	params := sqlc.CreateProviderConfigParams{
 		ID:        config.ID,
-		Type:      string(config.Type),
+		Type:      config.Type,
 		Name:      config.Name,
 		Url:       config.URL,
 		TimeoutMs: int32(config.Timeout / time.Millisecond),
@@ -191,7 +191,7 @@ func (repository *ProviderConfigRepository) Delete(ctx context.Context, id strin
 func rowToProviderConfig(id, providerType, name, url string, timeoutMs int32, signals []string, options []byte, credentials pgtype.Text, isActive bool, createdAt, updatedAt pgtype.Timestamptz) (domain.ProviderConfig, error) {
 	config := domain.ProviderConfig{
 		ID:       id,
-		Type:     domain.ObservabilityProviderType(providerType),
+		Type:     providerType,
 		Name:     name,
 		URL:      url,
 		Timeout:  time.Duration(timeoutMs) * time.Millisecond,

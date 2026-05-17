@@ -14,11 +14,14 @@ import (
 // ProviderConfigRequest is the input accepted by ProviderConfig.Create and
 // ProviderConfig.Update.
 //
-// Credentials carries the plaintext secret material; the use case
-// encrypts it before persisting and never stores plaintext. When the
-// caller omits credentials on Update the previous ciphertext is preserved.
+// Type carries the operator-supplied provider identifier; the use case
+// validates it against ports.ObservabilityProviderRegistry before
+// persisting. Credentials carries the plaintext secret material; the use
+// case encrypts it before persisting and never stores plaintext. When
+// the caller omits credentials on Update the previous ciphertext is
+// preserved.
 type ProviderConfigRequest struct {
-	Type        domain.ObservabilityProviderType
+	Type        string
 	Name        string
 	URL         string
 	Timeout     time.Duration
@@ -39,14 +42,19 @@ type ProviderConfig struct {
 	repository ports.ProviderConfigRepository
 	cipher     ports.Cipher
 	tester     ports.ProviderTester
+	registry   ports.ObservabilityProviderRegistry
 	ids        ports.IDGenerator
 	reload     ReloadHook
 	now        func() time.Time
 }
 
 // NewProviderConfig creates a ProviderConfig use case.
-func NewProviderConfig(repository ports.ProviderConfigRepository, cipher ports.Cipher, tester ports.ProviderTester, ids ports.IDGenerator) *ProviderConfig {
-	return &ProviderConfig{repository: repository, cipher: cipher, tester: tester, ids: ids, now: time.Now}
+//
+// registry is the source of truth for which provider types this build
+// supports; the use case rejects unknown types up front so operators get
+// a clear error before adapter construction.
+func NewProviderConfig(repository ports.ProviderConfigRepository, cipher ports.Cipher, tester ports.ProviderTester, registry ports.ObservabilityProviderRegistry, ids ports.IDGenerator) *ProviderConfig {
+	return &ProviderConfig{repository: repository, cipher: cipher, tester: tester, registry: registry, ids: ids, now: time.Now}
 }
 
 // WithReloadHook installs a hook that fires after mutations so the
@@ -78,7 +86,7 @@ func (useCase *ProviderConfig) Create(ctx context.Context, request ProviderConfi
 	now := useCase.now().UTC()
 	config := domain.ProviderConfig{
 		ID:                    id,
-		Type:                  request.Type,
+		Type:                  strings.ToLower(strings.TrimSpace(request.Type)),
 		Name:                  strings.TrimSpace(request.Name),
 		URL:                   strings.TrimSpace(request.URL),
 		Timeout:               request.Timeout,
@@ -134,7 +142,7 @@ func (useCase *ProviderConfig) Update(ctx context.Context, id string, request Pr
 			return domain.ProviderConfig{}, err
 		}
 	}
-	current.Type = request.Type
+	current.Type = strings.ToLower(strings.TrimSpace(request.Type))
 	current.Name = strings.TrimSpace(request.Name)
 	current.URL = strings.TrimSpace(request.URL)
 	current.Timeout = request.Timeout
@@ -222,7 +230,7 @@ func (useCase *ProviderConfig) setActive(ctx context.Context, id string, active 
 }
 
 func (useCase *ProviderConfig) validateRequest(request ProviderConfigRequest) error {
-	if !domain.IsValidObservabilityProviderType(request.Type) {
+	if useCase.registry == nil || !useCase.registry.IsSupported(request.Type) {
 		return fmt.Errorf("%w: type %q is not supported", domain.ErrInvalidProviderConfig, request.Type)
 	}
 	if strings.TrimSpace(request.Name) == "" {

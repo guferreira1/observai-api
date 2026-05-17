@@ -17,6 +17,7 @@ import (
 	"time"
 
 	inboundhttp "github.com/guferreira1/observai-api/internal/adapters/inbound/http"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/factory"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/ports"
 )
@@ -34,25 +35,25 @@ type llmProbe struct {
 	auth   func(*http.Request, string)
 }
 
-var observabilityProbes = map[domain.ObservabilityProviderType]observabilityProbe{
-	domain.ProviderTypePrometheus:    {path: "/api/v1/query?query=up", auth: noAuth},
-	domain.ProviderTypeLoki:          {path: "/loki/api/v1/labels", auth: basicAuth},
-	domain.ProviderTypeJaeger:        {path: "/api/services", auth: noAuth},
-	domain.ProviderTypeElasticsearch: {path: "/", auth: basicAuth},
-	domain.ProviderTypeOpenSearch:    {path: "/", auth: basicAuth},
-	domain.ProviderTypeOTEL:          {path: "/", auth: bearerAuth},
-	domain.ProviderTypeTempo:         {path: "/ready", auth: noAuth},
-	domain.ProviderTypeDynatrace:     {path: "/api/v2/clusterversion", auth: dynatraceAuth},
-	domain.ProviderTypeDatadog:       {path: "/api/v1/validate", auth: datadogAuth},
-	domain.ProviderTypeNewRelic:      {path: "/graphql", auth: newRelicAuth},
+var observabilityProbes = map[string]observabilityProbe{
+	factory.ProviderTypePrometheus:    {path: "/api/v1/query?query=up", auth: noAuth},
+	factory.ProviderTypeLoki:          {path: "/loki/api/v1/labels", auth: basicAuth},
+	factory.ProviderTypeJaeger:        {path: "/api/services", auth: noAuth},
+	factory.ProviderTypeElasticsearch: {path: "/", auth: basicAuth},
+	factory.ProviderTypeOpenSearch:    {path: "/", auth: basicAuth},
+	factory.ProviderTypeOTEL:          {path: "/", auth: bearerAuth},
+	factory.ProviderTypeTempo:         {path: "/ready", auth: noAuth},
+	factory.ProviderTypeDynatrace:     {path: "/api/v2/clusterversion", auth: dynatraceAuth},
+	factory.ProviderTypeDatadog:       {path: "/api/v1/validate", auth: datadogAuth},
+	factory.ProviderTypeNewRelic:      {path: "/graphql", auth: newRelicAuth},
 }
 
-var llmProbes = map[domain.LLMProviderType]llmProbe{
-	domain.LLMProviderTypeOllama:     {method: http.MethodGet, path: "/api/tags", auth: noAuth},
-	domain.LLMProviderTypeOpenAI:     {method: http.MethodGet, path: "/v1/models", auth: bearerAuth},
-	domain.LLMProviderTypeAnthropic:  {method: http.MethodGet, path: "/v1/models", auth: anthropicAuth},
-	domain.LLMProviderTypeAzure:      {method: http.MethodGet, path: "/openai/models?api-version=2024-02-01", auth: azureAuth},
-	domain.LLMProviderTypeOpenRouter: {method: http.MethodGet, path: "/v1/models", auth: bearerAuth},
+var llmProbes = map[string]llmProbe{
+	factory.LLMProviderTypeOllama:     {method: http.MethodGet, path: "/api/tags", auth: noAuth},
+	factory.LLMProviderTypeOpenAI:     {method: http.MethodGet, path: "/v1/models", auth: bearerAuth},
+	factory.LLMProviderTypeAnthropic:  {method: http.MethodGet, path: "/v1/models", auth: anthropicAuth},
+	factory.LLMProviderTypeAzure:      {method: http.MethodGet, path: "/openai/models?api-version=2024-02-01", auth: azureAuth},
+	factory.LLMProviderTypeOpenRouter: {method: http.MethodGet, path: "/v1/models", auth: bearerAuth},
 }
 
 // Tester implements ports.ProviderTester over net/http.

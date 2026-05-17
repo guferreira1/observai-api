@@ -47,7 +47,7 @@ func (repository *LLMConfigRepository) Create(ctx context.Context, config domain
 	}
 	params := sqlc.CreateLLMConfigParams{
 		ID:        config.ID,
-		Type:      string(config.Type),
+		Type:      config.Type,
 		Name:      config.Name,
 		BaseUrl:   config.BaseURL,
 		Model:     config.Model,
@@ -202,7 +202,7 @@ func (repository *LLMConfigRepository) Delete(ctx context.Context, id string) (e
 func rowToLLMConfig(id, providerType, name, baseURL, model string, timeoutMs int32, options []byte, apiKey pgtype.Text, isActive bool, createdAt, updatedAt pgtype.Timestamptz) (domain.LLMConfig, error) {
 	config := domain.LLMConfig{
 		ID:       id,
-		Type:     domain.LLMProviderType(providerType),
+		Type:     providerType,
 		Name:     name,
 		BaseURL:  baseURL,
 		Model:    model,

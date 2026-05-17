@@ -125,7 +125,7 @@ func toProviderConfigRequest(dto ProviderConfigRequestDto) usecase.ProviderConfi
 		timeout = 10 * time.Second
 	}
 	return usecase.ProviderConfigRequest{
-		Type:        domain.ObservabilityProviderType(strings.ToLower(strings.TrimSpace(dto.Type))),
+		Type:        strings.ToLower(strings.TrimSpace(dto.Type)),
 		Name:        dto.Name,
 		URL:         dto.URL,
 		Timeout:     timeout,
@@ -142,7 +142,7 @@ func toLLMConfigRequest(dto LLMConfigRequestDto) usecase.LLMConfigRequest {
 		timeout = 30 * time.Second
 	}
 	return usecase.LLMConfigRequest{
-		Type:     domain.LLMProviderType(strings.ToLower(strings.TrimSpace(dto.Type))),
+		Type:     strings.ToLower(strings.TrimSpace(dto.Type)),
 		Name:     dto.Name,
 		BaseURL:  dto.BaseURL,
 		Model:    dto.Model,

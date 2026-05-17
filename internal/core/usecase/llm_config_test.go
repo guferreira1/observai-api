@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/factory"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 )
 
@@ -96,11 +97,11 @@ func (stub *stubLLMConfigRepo) Delete(_ context.Context, id string) error {
 }
 
 func TestLLMConfigCreateValidatesInput(t *testing.T) {
-	useCase := NewLLMConfig(newStubLLMConfigRepo(), stubCipher{}, stubProviderTester{}, &sequentialIDs{})
+	useCase := NewLLMConfig(newStubLLMConfigRepo(), stubCipher{}, stubProviderTester{}, factory.NewLLMRegistry(), &sequentialIDs{})
 	cases := []LLMConfigRequest{
-		{Type: domain.LLMProviderTypeOpenAI, Name: "", BaseURL: "http://x", Model: "gpt"},
-		{Type: domain.LLMProviderTypeOpenAI, Name: "x", BaseURL: "", Model: "gpt"},
-		{Type: domain.LLMProviderTypeOpenAI, Name: "x", BaseURL: "http://x", Model: ""},
+		{Type: factory.LLMProviderTypeOpenAI, Name: "", BaseURL: "http://x", Model: "gpt"},
+		{Type: factory.LLMProviderTypeOpenAI, Name: "x", BaseURL: "", Model: "gpt"},
+		{Type: factory.LLMProviderTypeOpenAI, Name: "x", BaseURL: "http://x", Model: ""},
 		{Type: "bogus", Name: "x", BaseURL: "http://x", Model: "gpt"},
 	}
 	for _, request := range cases {
@@ -111,10 +112,10 @@ func TestLLMConfigCreateValidatesInput(t *testing.T) {
 }
 
 func TestLLMConfigCreateNormalizesOpenAICompatibleAlias(t *testing.T) {
-	useCase := NewLLMConfig(newStubLLMConfigRepo(), stubCipher{}, stubProviderTester{}, &sequentialIDs{})
+	useCase := NewLLMConfig(newStubLLMConfigRepo(), stubCipher{}, stubProviderTester{}, factory.NewLLMRegistry(), &sequentialIDs{})
 
 	created, err := useCase.Create(context.Background(), LLMConfigRequest{
-		Type:    domain.LLMProviderType("openai-compatible"),
+		Type:    "openai-compatible",
 		Name:    "self-hosted-openai",
 		BaseURL: "http://llm-gateway:8080/v1",
 		Model:   "qwen2.5-coder",
@@ -124,16 +125,16 @@ func TestLLMConfigCreateNormalizesOpenAICompatibleAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if created.Type != domain.LLMProviderTypeOpenAI {
+	if created.Type != factory.LLMProviderTypeOpenAI {
 		t.Fatalf("expected canonical openai type, got %q", created.Type)
 	}
 }
 
 func TestLLMConfigActivateIsMutuallyExclusive(t *testing.T) {
 	repo := newStubLLMConfigRepo()
-	useCase := NewLLMConfig(repo, stubCipher{}, stubProviderTester{}, &sequentialIDs{})
+	useCase := NewLLMConfig(repo, stubCipher{}, stubProviderTester{}, factory.NewLLMRegistry(), &sequentialIDs{})
 	first, err := useCase.Create(context.Background(), LLMConfigRequest{
-		Type:     domain.LLMProviderTypeOllama,
+		Type:     factory.LLMProviderTypeOllama,
 		Name:     "primary",
 		BaseURL:  "http://ollama:11434",
 		Model:    "llama3",
@@ -143,7 +144,7 @@ func TestLLMConfigActivateIsMutuallyExclusive(t *testing.T) {
 		t.Fatalf("create first: %v", err)
 	}
 	second, err := useCase.Create(context.Background(), LLMConfigRequest{
-		Type:    domain.LLMProviderTypeOpenAI,
+		Type:    factory.LLMProviderTypeOpenAI,
 		Name:    "secondary",
 		BaseURL: "https://api.openai.com",
 		Model:   "gpt-4o-mini",
@@ -166,9 +167,9 @@ func TestLLMConfigActivateIsMutuallyExclusive(t *testing.T) {
 
 func TestLLMConfigUpdatePreservesAPIKeyWhenEmpty(t *testing.T) {
 	repo := newStubLLMConfigRepo()
-	useCase := NewLLMConfig(repo, stubCipher{}, stubProviderTester{}, &sequentialIDs{})
+	useCase := NewLLMConfig(repo, stubCipher{}, stubProviderTester{}, factory.NewLLMRegistry(), &sequentialIDs{})
 	created, err := useCase.Create(context.Background(), LLMConfigRequest{
-		Type:    domain.LLMProviderTypeOpenAI,
+		Type:    factory.LLMProviderTypeOpenAI,
 		Name:    "openai",
 		BaseURL: "https://api.openai.com",
 		Model:   "gpt-4o-mini",
@@ -178,7 +179,7 @@ func TestLLMConfigUpdatePreservesAPIKeyWhenEmpty(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	updated, err := useCase.Update(context.Background(), created.ID, LLMConfigRequest{
-		Type:    domain.LLMProviderTypeOpenAI,
+		Type:    factory.LLMProviderTypeOpenAI,
 		Name:    "openai-renamed",
 		BaseURL: "https://api.openai.com",
 		Model:   "gpt-4o-mini",

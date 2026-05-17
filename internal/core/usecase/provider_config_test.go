@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/factory"
 	"github.com/guferreira1/observai-api/internal/core/domain"
 	"github.com/guferreira1/observai-api/internal/core/ports"
 )
@@ -124,9 +125,9 @@ func (stub *stubProviderConfigRepo) Delete(_ context.Context, id string) error {
 
 func TestProviderConfigCreatePersistsAndEncrypts(t *testing.T) {
 	repo := newStubProviderConfigRepo()
-	useCase := NewProviderConfig(repo, stubCipher{}, stubProviderTester{}, &sequentialIDs{})
+	useCase := NewProviderConfig(repo, stubCipher{}, stubProviderTester{}, factory.NewObservabilityRegistry(), &sequentialIDs{})
 	config, err := useCase.Create(context.Background(), ProviderConfigRequest{
-		Type:        domain.ProviderTypePrometheus,
+		Type:        "prometheus",
 		Name:        "prom-prod",
 		URL:         "http://prometheus:9090",
 		Timeout:     10 * time.Second,
@@ -143,7 +144,7 @@ func TestProviderConfigCreatePersistsAndEncrypts(t *testing.T) {
 }
 
 func TestProviderConfigCreateRejectsInvalidType(t *testing.T) {
-	useCase := NewProviderConfig(newStubProviderConfigRepo(), stubCipher{}, stubProviderTester{}, &sequentialIDs{})
+	useCase := NewProviderConfig(newStubProviderConfigRepo(), stubCipher{}, stubProviderTester{}, factory.NewObservabilityRegistry(), &sequentialIDs{})
 	_, err := useCase.Create(context.Background(), ProviderConfigRequest{
 		Type: "bogus",
 		Name: "x",
@@ -156,9 +157,9 @@ func TestProviderConfigCreateRejectsInvalidType(t *testing.T) {
 
 func TestProviderConfigUpdatePreservesCredentialsWhenEmpty(t *testing.T) {
 	repo := newStubProviderConfigRepo()
-	useCase := NewProviderConfig(repo, stubCipher{}, stubProviderTester{}, &sequentialIDs{})
+	useCase := NewProviderConfig(repo, stubCipher{}, stubProviderTester{}, factory.NewObservabilityRegistry(), &sequentialIDs{})
 	created, err := useCase.Create(context.Background(), ProviderConfigRequest{
-		Type:        domain.ProviderTypePrometheus,
+		Type:        "prometheus",
 		Name:        "prom",
 		URL:         "http://prom",
 		Credentials: "initial-secret",
@@ -167,7 +168,7 @@ func TestProviderConfigUpdatePreservesCredentialsWhenEmpty(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	updated, err := useCase.Update(context.Background(), created.ID, ProviderConfigRequest{
-		Type: domain.ProviderTypePrometheus,
+		Type: "prometheus",
 		Name: "prom-renamed",
 		URL:  "http://prom-other",
 	})
@@ -182,9 +183,9 @@ func TestProviderConfigUpdatePreservesCredentialsWhenEmpty(t *testing.T) {
 func TestProviderConfigTestRunsTester(t *testing.T) {
 	repo := newStubProviderConfigRepo()
 	tester := stubProviderTester{observability: ports.ProviderTestResult{Reached: true, LatencyMs: 42}}
-	useCase := NewProviderConfig(repo, stubCipher{}, tester, &sequentialIDs{})
+	useCase := NewProviderConfig(repo, stubCipher{}, tester, factory.NewObservabilityRegistry(), &sequentialIDs{})
 	created, _ := useCase.Create(context.Background(), ProviderConfigRequest{
-		Type:        domain.ProviderTypePrometheus,
+		Type:        "prometheus",
 		Name:        "prom",
 		URL:         "http://prom",
 		Credentials: "secret",
@@ -200,9 +201,9 @@ func TestProviderConfigTestRunsTester(t *testing.T) {
 
 func TestProviderConfigActivateAndDeactivateTogglesFlag(t *testing.T) {
 	repo := newStubProviderConfigRepo()
-	useCase := NewProviderConfig(repo, stubCipher{}, stubProviderTester{}, &sequentialIDs{})
+	useCase := NewProviderConfig(repo, stubCipher{}, stubProviderTester{}, factory.NewObservabilityRegistry(), &sequentialIDs{})
 	created, _ := useCase.Create(context.Background(), ProviderConfigRequest{
-		Type: domain.ProviderTypePrometheus,
+		Type: "prometheus",
 		Name: "prom",
 		URL:  "http://prom",
 	})

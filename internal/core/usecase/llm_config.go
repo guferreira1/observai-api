@@ -13,8 +13,13 @@ import (
 
 // LLMConfigRequest is the input accepted by LLMConfig.Create and
 // LLMConfig.Update.
+//
+// Type accepts any spelling recognized by
+// ports.LLMProviderRegistry.Normalize (canonical name or alias); the
+// use case stores the canonical form so a stored configuration always
+// uses one stable identifier.
 type LLMConfigRequest struct {
-	Type     domain.LLMProviderType
+	Type     string
 	Name     string
 	BaseURL  string
 	Model    string
@@ -31,14 +36,19 @@ type LLMConfig struct {
 	repository ports.LLMConfigRepository
 	cipher     ports.Cipher
 	tester     ports.ProviderTester
+	registry   ports.LLMProviderRegistry
 	ids        ports.IDGenerator
 	reload     ReloadHook
 	now        func() time.Time
 }
 
 // NewLLMConfig creates an LLMConfig use case.
-func NewLLMConfig(repository ports.LLMConfigRepository, cipher ports.Cipher, tester ports.ProviderTester, ids ports.IDGenerator) *LLMConfig {
-	return &LLMConfig{repository: repository, cipher: cipher, tester: tester, ids: ids, now: time.Now}
+//
+// registry is the source of truth for supported LLM provider types; the
+// use case calls Normalize so aliases (for example "openai-compatible")
+// are stored under their canonical key.
+func NewLLMConfig(repository ports.LLMConfigRepository, cipher ports.Cipher, tester ports.ProviderTester, registry ports.LLMProviderRegistry, ids ports.IDGenerator) *LLMConfig {
+	return &LLMConfig{repository: repository, cipher: cipher, tester: tester, registry: registry, ids: ids, now: time.Now}
 }
 
 // WithReloadHook installs a hook fired after mutations so the composition
@@ -206,8 +216,11 @@ func (useCase *LLMConfig) DecryptAPIKey(config domain.LLMConfig) (string, error)
 	return useCase.decryptAPIKey(config.APIKeyCipher)
 }
 
-func (useCase *LLMConfig) validateRequest(request LLMConfigRequest) (domain.LLMProviderType, error) {
-	providerType, ok := domain.NormalizeLLMProviderType(request.Type)
+func (useCase *LLMConfig) validateRequest(request LLMConfigRequest) (string, error) {
+	if useCase.registry == nil {
+		return "", fmt.Errorf("%w: type %q is not supported", domain.ErrInvalidLLMConfig, request.Type)
+	}
+	providerType, ok := useCase.registry.Normalize(request.Type)
 	if !ok {
 		return "", fmt.Errorf("%w: type %q is not supported", domain.ErrInvalidLLMConfig, request.Type)
 	}

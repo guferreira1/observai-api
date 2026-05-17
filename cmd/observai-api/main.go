@@ -14,6 +14,7 @@ import (
 
 	inboundhttp "github.com/guferreira1/observai-api/internal/adapters/inbound/http"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/credentials"
+	"github.com/guferreira1/observai-api/internal/adapters/outbound/factory"
 	"github.com/guferreira1/observai-api/internal/adapters/outbound/providertest"
 	uuidadapter "github.com/guferreira1/observai-api/internal/adapters/outbound/uuid"
 	"github.com/guferreira1/observai-api/internal/core/usecase"
@@ -238,8 +239,8 @@ func buildProviderUseCases(cfg config.Config, log *slog.Logger, store analysisSt
 		}
 
 		tester := providertest.New()
-		providerConfigUseCase = usecase.NewProviderConfig(store.providerConfigs, cipher, tester, ids)
-		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, ids)
+		providerConfigUseCase = usecase.NewProviderConfig(store.providerConfigs, cipher, tester, factory.NewObservabilityRegistry(), ids)
+		llmConfigUseCase = usecase.NewLLMConfig(store.llmConfigs, cipher, tester, factory.NewLLMRegistry(), ids)
 	}
 
 	return providerConfigUseCase, llmConfigUseCase, nil

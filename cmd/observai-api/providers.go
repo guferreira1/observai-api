@@ -243,18 +243,18 @@ func initialLLMProviderConfig(ctx context.Context, cfg config.Config, log *slog.
 	return mergeDBLLMIntoConfig(cfg, &active, plaintextAPIKey), true
 }
 
-func applyProviderCredentials(options map[string]string, providerType domain.ObservabilityProviderType, credentials string) {
+func applyProviderCredentials(options map[string]string, providerType, credentials string) {
 	if options == nil || credentials == "" {
 		return
 	}
 	switch providerType {
-	case domain.ProviderTypeDynatrace:
+	case factory.ProviderTypeDynatrace:
 		options["api_token"] = credentials
-	case domain.ProviderTypeDatadog:
+	case factory.ProviderTypeDatadog:
 		options["credentials"] = credentials
-	case domain.ProviderTypeNewRelic:
+	case factory.ProviderTypeNewRelic:
 		options["api_key"] = credentials
-	case domain.ProviderTypeElasticsearch, domain.ProviderTypeOpenSearch:
+	case factory.ProviderTypeElasticsearch, factory.ProviderTypeOpenSearch:
 		if strings.Contains(credentials, ":") {
 			parts := strings.SplitN(credentials, ":", 2)
 			options["username"] = parts[0]
