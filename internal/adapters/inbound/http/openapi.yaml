@@ -868,6 +868,26 @@ paths:
       parameters: [{ in: path, name: llmID, required: true, schema: { type: string } }]
       responses: { "200": { description: Activated. } }
 
+  /v1/admin/provider-types:
+    get:
+      tags: [admin]
+      summary: List observability and LLM provider type identifiers the running build accepts.
+      description: >
+        The lists are derived at runtime from the adapter registry, so
+        clients can populate dropdowns without hardcoding the catalogue.
+        Observability includes both signal collectors and trace-only
+        providers; LLM lists canonical identifiers (aliases such as
+        `openai-compatible` are accepted on write but stored as their
+        canonical form).
+      operationId: listProviderTypes
+      responses:
+        "200":
+          description: Provider type catalogue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WrapperDtoResponde_ProviderTypesResponseDto"
+
   /v1/admin/webhooks:
     get:
       tags: [admin]
@@ -1997,7 +2017,11 @@ components:
         id: { type: string }
         type:
           type: string
-          enum: [prometheus, loki, jaeger, elasticsearch, opensearch, otel, tempo, dynatrace, datadog, newrelic]
+          description: >
+            Observability provider identifier. The set of accepted values
+            depends on which adapters the running build ships; call
+            `GET /v1/admin/provider-types` to discover the current
+            catalogue instead of hardcoding the list client-side.
         name: { type: string }
         url: { type: string, format: uri }
         timeoutMs: { type: integer, minimum: 0 }
@@ -2017,7 +2041,10 @@ components:
         id: { type: string }
         type:
           type: string
-          enum: [ollama, openai, openai-compatible, anthropic, azure, openrouter]
+          description: >
+            LLM provider identifier in canonical form. Aliases such as
+            `openai-compatible` are normalized on write to the canonical
+            value listed by `GET /v1/admin/provider-types`.
         name: { type: string }
         baseUrl: { type: string, format: uri }
         model: { type: string }
@@ -2030,6 +2057,26 @@ components:
         isActive: { type: boolean }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    ProviderTypesResponseDto:
+      type: object
+      required: [observability, llm]
+      properties:
+        observability:
+          type: array
+          items: { type: string }
+          description: Observability provider identifiers accepted by this build.
+        llm:
+          type: array
+          items: { type: string }
+          description: Canonical LLM provider identifiers accepted by this build.
+    WrapperDtoResponde_ProviderTypesResponseDto:
+      type: object
+      required: [data, metadata]
+      properties:
+        data:
+          $ref: "#/components/schemas/ProviderTypesResponseDto"
+        metadata:
+          $ref: "#/components/schemas/ResponseMetadata"
     TestConnectionResponseDto:
       type: object
       required: [reached, latencyMs]
